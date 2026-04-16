@@ -135,6 +135,54 @@ def _detect_header_row(df_raw: pd.DataFrame, max_scan: int = 50) -> int:
     return best_row
 
 
+def _detect_currency_from_formats(file_bytes: bytes, sheet_name: str | None = None) -> str | None:
+    """Scan Excel number formats for currency symbols and return ISO code.
+
+    Handles formats like:
+      #,##0.00\ "€"   → EUR
+      #,##0.00\ "CHF" → CHF
+      [$USD]          → USD
+      [$£-809]        → GBP
+    """
+    import openpyxl, re
+
+    _FORMAT_MAP = [
+        (r'CHF',        "CHF"),
+        (r'\bFR\b',     "CHF"),
+        (r'€|EUR',      "EUR"),
+        (r'\$(?![\w])', "USD"),  # $ not followed by letters (avoids $CHF etc.)
+        (r'USD',        "USD"),
+        (r'£|GBP',      "GBP"),
+        (r'NOK',        "NOK"),
+        (r'SEK',        "SEK"),
+        (r'DKK',        "DKK"),
+        (r'GBP',        "GBP"),
+    ]
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        ws = wb[sheet_name] if sheet_name else wb.active
+
+        formats_seen: dict[str, int] = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                fmt = cell.number_format or ""
+                if fmt in ("General", "@", ""):
+                    continue
+                for pattern, iso in _FORMAT_MAP:
+                    if re.search(pattern, fmt, re.IGNORECASE):
+                        formats_seen[iso] = formats_seen.get(iso, 0) + 1
+                        break
+
+        if not formats_seen:
+            return None
+        # Return the most common currency found
+        return max(formats_seen, key=lambda k: formats_seen[k])
+
+    except Exception:
+        return None
+
+
 def _unmerge_cells(file_bytes: bytes, sheet_name: str | None = None) -> bytes:
     """Load xlsx with openpyxl, unmerge all cells (fill with top-left value), return bytes."""
     import openpyxl
@@ -321,9 +369,14 @@ def _read_uploaded_file(uploaded_file) -> ReadResult:
             )
             st.success(f"📊 {unpivot_info}")
 
+        # Detect currency from Excel number formats (e.g. #,##0.00 "€")
+        format_currency = _detect_currency_from_formats(raw_bytes, chosen)
+        if format_currency and not metadata_hints.get("detected_currency"):
+            metadata_hints["detected_currency"] = format_currency
+
         if metadata_hints.get("detected_currency"):
             st.info(
-                f"💱 Währung aus Metadaten erkannt: "
+                f"💱 Währung erkannt: "
                 f"**{metadata_hints['detected_currency']}**"
             )
 
@@ -563,6 +616,8 @@ def render():
         df_edit["vk_target"] = None
     if "ordered_qty" not in df_edit.columns:
         df_edit["ordered_qty"] = None
+    if "available_qty" not in df_edit.columns:
+        df_edit["available_qty"] = None
 
     # Serialize extra_fields dict → readable string for display
     if "extra_fields" in df_edit.columns:
@@ -582,6 +637,7 @@ def render():
         "category": st.column_config.TextColumn("Kategorie"),
         "unit_price": st.column_config.NumberColumn("EK/Stk (orig.)", format="%.4f"),
         "currency": st.column_config.TextColumn("Währung"),
+        "available_qty": st.column_config.NumberColumn("Max. verfügbar", format="%d"),
         "ordered_qty": st.column_config.NumberColumn("Bestellt", format="%d"),
         "min_qty": st.column_config.NumberColumn("Min. Menge", format="%d"),
         "discount_pct": st.column_config.NumberColumn("Rabatt %", format="%.2f"),

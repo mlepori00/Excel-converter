@@ -23,10 +23,14 @@ SYSTEM_PROMPT = (
     "Standard fields: sku, ean, product_name, size, color, category, "
     "unit_price (number, price per single piece), "
     "currency (ISO), "
-    "ordered_qty (int, the exact quantity from the 'ORDER', 'QTY', 'QUANTITY' or equivalent "
-    "column – use the value as-is, even if it is 0. Never substitute 0 with 1. "
-    "If no quantity column exists at all, use null), "
-    "min_qty (int, minimum order quantity if stated separately from ordered_qty, else null), "
+    "ordered_qty (int, the quantity actually ordered or requested in this transaction. "
+    "Look for columns named ORDER, BESTELLUNG, QTY ORDERED, QUANTITY ORDERED, ORDERED. "
+    "Use the exact value, even if 0. Never substitute 0 with 1. "
+    "If no order-quantity column exists, use null – do NOT use stock or availability numbers here), "
+    "available_qty (int, the available stock or inventory quantity. "
+    "Look for columns named AVAILABLE, TOTAL, STOCK, LAGER, VERFÜGBAR, QTY AVAILABLE, BESTAND. "
+    "If no availability column exists, use null), "
+    "min_qty (int, minimum order quantity if stated separately, else null), "
     "discount_pct (number 0-100, convert decimal fractions: 0.05 → 5, 0.1 → 10), "
     "notes. "
     "Use null for missing standard fields. "
@@ -49,8 +53,8 @@ SYSTEM_PROMPT = (
 
 REQUIRED_FIELDS = [
     "sku", "ean", "product_name", "size", "color", "category",
-    "unit_price", "currency", "ordered_qty", "min_qty", "discount_pct", "notes",
-    "extra_fields",
+    "unit_price", "currency", "ordered_qty", "available_qty", "min_qty",
+    "discount_pct", "notes", "extra_fields",
 ]
 
 

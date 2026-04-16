@@ -19,22 +19,23 @@ THIN_SIDE = Side(style="thin", color="C0C0C0")
 THIN_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
 
 OUTPUT_COLUMNS = [
-    ("Pos", "pos"),
-    ("Bezeichnung", "product_name"),
-    ("SKU", "sku"),
-    ("EAN", "ean"),
-    ("Grösse", "size"),
-    ("Farbe", "color"),
-    ("Kategorie", "category"),
-    ("Menge", "qty"),
-    ("EK/Stk", "ek_unit_target"),
-    ("EK Total", "ek_target"),
-    ("Marge %", "margin_actual"),
-    ("VK/Stk", "vk_unit_target"),
-    ("VK Total", "vk_target"),
-    ("Währung", "currency"),
-    ("Notizen", "notes"),
-    ("Zusatzinfos", "extra_fields"),  # catch-all for unmapped supplier columns
+    ("Pos",           "pos"),
+    ("Bezeichnung",   "product_name"),
+    ("SKU",           "sku"),
+    ("EAN",           "ean"),
+    ("Grösse",        "size"),
+    ("Farbe",         "color"),
+    ("Kategorie",     "category"),
+    ("Bestellt",      "qty"),
+    ("Max. verfügbar","available_qty"),
+    ("EK/Stk",        "ek_unit_target"),
+    ("EK Total",      "ek_target"),
+    ("Marge %",       "margin_actual"),
+    ("VK/Stk",        "vk_unit_target"),
+    ("VK Total",      "vk_target"),
+    ("Währung",       "currency"),
+    ("Notizen",       "notes"),
+    ("Zusatzinfos",   "extra_fields"),
 ]
 
 
@@ -123,7 +124,7 @@ def build_excel(
             elif field == "margin_actual":
                 cell.number_format = '0.00"%"'
                 cell.alignment = Alignment(horizontal="right", vertical="center")
-            elif field == "qty":
+            elif field in ("qty", "available_qty"):
                 cell.number_format = "0"
                 cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -150,12 +151,20 @@ def build_excel(
     ek_end = data_row - 1
 
     if n_data > 0:
-        # Quantity total
+        # Ordered quantity total
         qty_col_letter = get_column_letter(col_map["qty"])
         qty_cell = ws.cell(row=total_row, column=col_map["qty"])
         qty_cell.value = f"=SUM({qty_col_letter}{ek_start}:{qty_col_letter}{ek_end})"
         qty_cell.number_format = "0"
         qty_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Available quantity total (only if column present)
+        if "available_qty" in col_map:
+            avail_col_letter = get_column_letter(col_map["available_qty"])
+            avail_cell = ws.cell(row=total_row, column=col_map["available_qty"])
+            avail_cell.value = f"=SUM({avail_col_letter}{ek_start}:{avail_col_letter}{ek_end})"
+            avail_cell.number_format = "0"
+            avail_cell.alignment = Alignment(horizontal="center", vertical="center")
 
         # EK Total sum
         ek_cell = ws.cell(row=total_row, column=col_map["ek_target"])
