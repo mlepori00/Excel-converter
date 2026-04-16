@@ -87,9 +87,19 @@ def _estimate_api_cost(text: str, n_chunks: int) -> None:
 
 
 def _detect_header_row(df_raw: pd.DataFrame, max_scan: int = 50) -> int:
-    """Find the best header row – prefers rows with many string values."""
+    """Find the best header row using a scoring approach.
+
+    Scores each candidate row and returns the one that looks most like a header:
+    - Prefers rows with many unique string values
+    - Tolerates mixed rows (e.g. 'SKU | Price | Qty' where Price/Qty are numeric labels)
+    - Ignores completely empty rows
+    - Falls back to row 0 if nothing convincing is found
+    """
     n_cols = len(df_raw.columns)
-    min_fill = max(3, int(n_cols * 0.75))
+    min_fill = max(2, int(n_cols * 0.4))  # lowered from 0.75 to handle sparse headers
+    best_row = 0
+    best_score = -1
+
     for i in range(min(len(df_raw), max_scan)):
         row = df_raw.iloc[i]
         non_null = [
@@ -98,10 +108,31 @@ def _detect_header_row(df_raw: pd.DataFrame, max_scan: int = 50) -> int:
         ]
         if len(non_null) < min_fill:
             continue
+
         str_vals = [v for v in non_null if isinstance(v, str) and str(v).strip()]
-        if len(str_vals) / len(non_null) >= 0.6:
+        unique_str = set(str(v).strip().lower() for v in str_vals)
+
+        # Score: ratio of string values + bonus for uniqueness + bonus for typical header keywords
+        header_keywords = {
+            "sku", "ean", "name", "artikel", "price", "preis", "qty", "menge",
+            "color", "farbe", "size", "grösse", "groesse", "description",
+            "bezeichnung", "quantity", "discount", "rabatt", "upc", "gtin",
+            "num", "id", "style", "gender", "family", "wholesale", "retail",
+        }
+        keyword_hits = sum(1 for w in unique_str if any(kw in w for kw in header_keywords))
+        str_ratio = len(str_vals) / len(non_null) if non_null else 0
+        uniqueness = len(unique_str) / len(str_vals) if str_vals else 0
+        score = str_ratio * 0.4 + uniqueness * 0.3 + min(keyword_hits / 3, 1.0) * 0.3
+
+        if score > best_score:
+            best_score = score
+            best_row = i
+
+        # Early exit: very confident header found
+        if score >= 0.7:
             return i
-    return 0
+
+    return best_row
 
 
 def _unmerge_cells(file_bytes: bytes, sheet_name: str | None = None) -> bytes:
@@ -572,6 +603,29 @@ def render():
     rates = settings["rates"]
     enriched = enrich_dataframe(edited_df, margin_pct, target_currency, rates)
     st.session_state["enriched_df"] = enriched
+
+    # Warn if any rows had their quantity defaulted to 1
+    if "_qty_fallback" in enriched.columns:
+        fallback_rows = enriched[enriched["_qty_fallback"] == True]
+        if not fallback_rows.empty:
+            names = fallback_rows.get("product_name", fallback_rows.index).tolist()
+            st.warning(
+                f"⚠️ **Menge nicht erkannt** bei {len(fallback_rows)} Position(en) – "
+                f"Menge wurde auf **1** gesetzt. Bitte manuell prüfen: "
+                + ", ".join(str(n) for n in names[:5])
+                + ("…" if len(names) > 5 else "")
+            )
+
+    # Warn if any currencies are unknown (fallback to 1:1 rate)
+    if "_unknown_currency" in enriched.columns:
+        unknown = enriched[enriched["_unknown_currency"] == True]
+        if not unknown.empty:
+            bad_currencies = unknown["currency"].dropna().unique().tolist()
+            st.error(
+                f"🚨 **Unbekannte Währung(en): {', '.join(bad_currencies)}** – "
+                f"Kein Wechselkurs verfügbar, Umrechnung 1:1 verwendet. "
+                f"Bitte Wechselkurs in den Einstellungen nachtragen."
+            )
 
     display_cols = [
         "product_name", "sku", "currency", "qty",

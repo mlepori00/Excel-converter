@@ -25,20 +25,27 @@ def convert_to_target(
     from_currency: str,
     to_currency: str,
     rates: dict[str, float] | None = None,
-) -> float | None:
+) -> tuple[float | None, bool]:
     """Convert *amount* from *from_currency* to *to_currency* using static rates.
 
     Rates are expressed as "1 CHF = X foreign", so:
         CHF amount = foreign / rate_foreign
         target = chf_amount * rate_target
+
+    Returns (converted_amount, unknown_currency_used).
+    unknown_currency_used is True if either currency was missing from the rates dict
+    (in which case 1:1 is used as fallback – caller should warn the user).
     """
     if amount is None:
-        return None
+        return None, False
     r = rates or DEFAULT_RATES
-    from_rate = r.get(from_currency.upper(), 1.0)
-    to_rate = r.get(to_currency.upper(), 1.0)
+    from_upper = from_currency.upper()
+    to_upper = to_currency.upper()
+    unknown = from_upper not in r or to_upper not in r
+    from_rate = r.get(from_upper, 1.0)
+    to_rate = r.get(to_upper, 1.0)
     chf = amount / from_rate
-    return chf * to_rate
+    return chf * to_rate, unknown
 
 
 def calculate_vk(ek: float | None, margin: float) -> float | None:

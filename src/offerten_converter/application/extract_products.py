@@ -65,21 +65,43 @@ def _normalize_item(item: dict) -> dict:
 
 
 def _repair_truncated_json(raw: str) -> str:
-    """Attempt to salvage a truncated JSON array."""
-    last_close = raw.rfind("}")
-    if last_close == -1:
+    """Attempt to salvage a truncated JSON array.
+
+    Strategy: find the last complete object (ends with '}, ' or '}]') and
+    close the array there. This is safer than rfind('}') which can match
+    inside nested dicts (e.g. extra_fields: {"color": {"R": 255}}).
+    """
+    # Try progressively shorter tails until we get valid JSON
+    # Look for boundaries that indicate a complete top-level object:
+    # '}, ' (comma between objects) or '}' right before end-of-array
+    candidates = []
+    pos = 0
+    while True:
+        idx = raw.find("},", pos)
+        if idx == -1:
+            break
+        candidates.append(idx + 1)   # include the '}'
+        pos = idx + 1
+
+    # Also try the raw rfind('}') as last resort
+    last_brace = raw.rfind("}")
+    if last_brace != -1 and last_brace not in candidates:
+        candidates.append(last_brace)
+
+    if not candidates:
         raise ValueError("No complete JSON object found in response.")
-    repaired = raw[: last_close + 1] + "]"
-    try:
-        json.loads(repaired)
-        return repaired
-    except json.JSONDecodeError:
-        last_comma = raw.rfind("},")
-        if last_comma == -1:
-            raise ValueError("Cannot repair truncated JSON.")
-        repaired = raw[: last_comma + 1] + "]"
-        json.loads(repaired)
-        return repaired
+
+    # Try from longest to shortest
+    for cut in sorted(candidates, reverse=True):
+        repaired = raw[:cut + 1].rstrip().rstrip(",") + "]"
+        try:
+            json.loads(repaired)
+            logger.info("JSON repaired at position %d (of %d).", cut, len(raw))
+            return repaired
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError("Cannot repair truncated JSON – no valid cut point found.")
 
 
 def _parse_response(raw: str) -> list[dict]:
@@ -148,13 +170,40 @@ def _split_table_into_chunks(text: str, chunk_size: int | None = None) -> list[s
     """Split a plain-text table into chunks, repeating header in each.
 
     If chunk_size is None, it is calculated dynamically from content density.
+
+    Handles multi-line cells: pandas to_string() wraps long values across lines.
+    A continuation line (no leading column alignment) is merged back into the
+    previous data row before splitting to avoid sending broken rows to Claude.
     """
+    import re
+
     effective_size = chunk_size if chunk_size is not None else _calculate_chunk_size(text)
     lines = text.splitlines()
-    if len(lines) <= effective_size + 1:
+    if not lines:
         return [text]
+
     header = lines[0]
-    data_lines = lines[1:]
+    raw_data = lines[1:]
+
+    # Detect column start positions from header to identify continuation lines.
+    # A continuation line starts with whitespace where the first column would be.
+    col_positions = [m.start() for m in re.finditer(r"\S", header)]
+    first_col_start = col_positions[0] if col_positions else 0
+
+    merged: list[str] = []
+    for line in raw_data:
+        if not line.strip():
+            continue
+        # If line starts before first column position → it's a continuation
+        if merged and line and not line[first_col_start].strip():
+            merged[-1] = merged[-1].rstrip() + " " + line.strip()
+        else:
+            merged.append(line)
+
+    if len(merged) <= effective_size:
+        return [header + "\n" + "\n".join(merged)]
+
+    data_lines = merged
     chunks = []
     for i in range(0, len(data_lines), effective_size):
         block = [header] + data_lines[i : i + effective_size]
