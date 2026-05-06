@@ -19,6 +19,8 @@ def init_state():
         "_file_fingerprint": None,
         "_rates_source": "statisch",   # "EZB (YYYY-MM-DD)" or "statisch"
         "_rates_loaded": False,
+        "market_prices": {},           # {ean: price_chf}
+        "market_prices_fetched": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -32,6 +34,8 @@ def clear_extraction():
     st.session_state["sanitize_log"] = []
     st.session_state["raw_api_response"] = None
     st.session_state["extraction_error"] = None
+    st.session_state["market_prices"] = {}
+    st.session_state["market_prices_fetched"] = False
 
 
 def get_settings() -> dict:

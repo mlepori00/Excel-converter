@@ -43,3 +43,12 @@ class ExcelWriter(ABC):
     @abstractmethod
     def build(self, df: pd.DataFrame, supplier_name: str, created_by: str,
               target_currency: str, valid_days: int) -> bytes: ...
+
+
+class MarketPricePort(ABC):
+    """Port for fetching current market prices by EAN."""
+
+    @abstractmethod
+    def fetch_price(self, ean: str) -> float | None:
+        """Return lowest market price for the given EAN, or None if not found."""
+        ...

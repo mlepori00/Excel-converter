@@ -24,6 +24,71 @@ logger = logging.getLogger(__name__)
 
 _repo = FileProfileRepository()
 
+_EAN_ALIASES = frozenset([
+    "ean", "upc/ean", "upc", "gtin", "barcode", "ean-code", "ean_code",
+])
+
+
+def _fetch_market_prices_once(extracted_df) -> None:
+    """Fetch market prices from toppreise.ch for all EANs – runs only once per extraction."""
+    if st.session_state.get("market_prices_fetched"):
+        return
+
+    st.session_state["market_prices_fetched"] = True
+
+    # Find EAN column (exact name or alias)
+    ean_col = None
+    if "ean" in extracted_df.columns:
+        ean_col = "ean"
+    else:
+        for col in extracted_df.columns:
+            if col.strip().lower() in _EAN_ALIASES:
+                ean_col = col
+                break
+
+    if ean_col is None:
+        return
+
+    eans = (
+        extracted_df[ean_col]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+    unique_eans = [e for e in eans.unique() if e]
+
+    if not unique_eans:
+        return
+
+    try:
+        from offerten_converter.infrastructure.market_price_scraper import ToppreiseScraper
+    except ImportError:
+        return
+
+    scraper = ToppreiseScraper()
+    prices: dict[str, float] = {}
+
+    progress = st.progress(0, text="Marktpreise werden geladen …")
+    status = st.empty()
+
+    import time
+    for i, ean in enumerate(unique_eans):
+        status.caption(f"Marktpreis: EAN {ean} ({i+1}/{len(unique_eans)})")
+        price = scraper.fetch_price(ean)
+        if price is not None:
+            prices[ean] = price
+        progress.progress((i + 1) / len(unique_eans))
+        if i < len(unique_eans) - 1:
+            time.sleep(2.5)
+
+    progress.empty()
+    status.empty()
+
+    st.session_state["market_prices"] = prices
+    if prices:
+        st.success(f"Marktpreise geladen: {len(prices)}/{len(unique_eans)} EANs gefunden.")
+
 # Pricing per 1M tokens (USD) – Claude Opus 4.5 (real rates from API dashboard)
 _PRICE_INPUT_PER_M = 15.0   # $15 / 1M input tokens
 _PRICE_OUTPUT_PER_M = 75.0  # $75 / 1M output tokens
@@ -505,7 +570,10 @@ def render():
     if st.session_state["extracted_df"] is None:
         return
 
-    # Step 5: Review & edit
+    # Step 5: Marktpreise laden (automatisch, einmalig nach Extraktion)
+    _fetch_market_prices_once(st.session_state["extracted_df"])
+
+    # Step 6: Review & edit (old Step 5)
     st.subheader("5. Extraktion prüfen & bearbeiten")
 
     if supplier_name:
@@ -559,6 +627,10 @@ def render():
             "Zusatzinfos", width="large", disabled=True,
         ),
         "vk_target": st.column_config.NumberColumn("VK manuell (leer=auto)", format="%.4f"),
+        "Marktpreis CHF": st.column_config.NumberColumn(
+            "Marktpreis CHF 🌐", format="%.2f", disabled=True,
+            help="Günstigster Preis auf toppreise.ch (nur Referenz, nicht im Export)"
+        ),
     }
 
     edited_df = st.data_editor(
@@ -567,36 +639,121 @@ def render():
     )
     st.session_state["extracted_df"] = edited_df
 
-    # Step 6: Pricing preview
-    st.subheader("6. Kalkulation")
+    # Step 6: Interactive pricing
+    st.subheader("6. Kalkulation & Preisbestimmung")
     rates = settings["rates"]
-    enriched = enrich_dataframe(edited_df, margin_pct, target_currency, rates)
+    market_prices: dict = st.session_state.get("market_prices", {})
+
+    # First pass: enrich with global margin to get EK in target currency
+    enriched_base = enrich_dataframe(edited_df, margin_pct, target_currency, rates)
+
+    # Build focused pricing table
+    price_rows = []
+    for _, row in enriched_base.iterrows():
+        ean = str(row.get("ean", "") or "").strip()
+        mp  = market_prices.get(ean) if ean else None
+        price_rows.append({
+            "Bezeichnung":      row.get("product_name", ""),
+            "Grösse":           row.get("size", ""),
+            "Farbe":            row.get("color", ""),
+            "Menge":            row.get("qty"),
+            "EK/Stk (CHF)":     row.get("ek_unit_target"),
+            "Marktpreis 🌐":    mp,
+            "Marge %":          margin_pct,
+            "VK/Stk (manuell)": None,
+        })
+
+    price_df = pd.DataFrame(price_rows)
+
+    # Restore previous edits if they exist and row count matches
+    prev = st.session_state.get("_pricing_edits")
+    if (
+        prev is not None
+        and len(prev) == len(price_df)
+        and "Marge %" in prev.columns
+    ):
+        price_df["Marge %"]          = prev["Marge %"].values
+        price_df["VK/Stk (manuell)"] = prev["VK/Stk (manuell)"].values
+
+    # Quick-fill controls
+    st.caption(
+        "**Marge %** pro Zeile editierbar. "
+        "**VK/Stk (manuell)** überschreibt die Marge. "
+        "Leer lassen = Marge wird verwendet."
+    )
+    if market_prices:
+        qcol1, qcol2, qcol3 = st.columns([1, 1, 3])
+        mp_discount = qcol1.number_input(
+            "Marktpreis –%", min_value=0.0, max_value=99.0,
+            value=0.0, step=0.5, format="%.1f",
+            help="Alle VK auf Marktpreis minus X% setzen",
+            key="mp_discount",
+        )
+        if qcol2.button("Auf alle anwenden", key="apply_mp"):
+            for i, row in price_df.iterrows():
+                mp_val = row["Marktpreis 🌐"]
+                if mp_val and not pd.isna(mp_val):
+                    price_df.at[i, "VK/Stk (manuell)"] = round(
+                        float(mp_val) * (1 - mp_discount / 100), 2
+                    )
+
+    edited_price = st.data_editor(
+        price_df,
+        column_config={
+            "Bezeichnung":      st.column_config.TextColumn(disabled=True, width="large"),
+            "Grösse":           st.column_config.TextColumn(disabled=True, width="small"),
+            "Farbe":            st.column_config.TextColumn(disabled=True, width="small"),
+            "Menge":            st.column_config.NumberColumn(disabled=True, format="%d"),
+            "EK/Stk (CHF)":     st.column_config.NumberColumn(disabled=True, format="%.2f"),
+            "Marktpreis 🌐":    st.column_config.NumberColumn(
+                disabled=True, format="%.2f",
+                help="Günstigster Preis toppreise.ch – nur Referenz, nicht im Export",
+            ),
+            "Marge %":          st.column_config.NumberColumn(
+                min_value=0.0, max_value=99.0, format="%.1f",
+                help="Editierbar pro Zeile",
+            ),
+            "VK/Stk (manuell)": st.column_config.NumberColumn(
+                format="%.2f",
+                help="Direkteingabe VK – überschreibt Marge %",
+            ),
+        },
+        use_container_width=True,
+        num_rows="fixed",
+        key="pricing_editor",
+    )
+    st.session_state["_pricing_edits"] = edited_price.copy()
+
+    # Apply per-row pricing decisions back to edited_df for enrich
+    df_for_export = edited_df.copy()
+    df_for_export["vk_target"] = None
+    df_for_export["_marge_override"] = None
+
+    for i, prow in edited_price.iterrows():
+        vk_manual = prow.get("VK/Stk (manuell)")
+        marge_pct_row = prow.get("Marge %", margin_pct)
+        if vk_manual and not pd.isna(vk_manual) and float(vk_manual) > 0:
+            df_for_export.at[i, "vk_target"] = float(vk_manual)
+        elif marge_pct_row != margin_pct:
+            df_for_export.at[i, "_marge_override"] = float(marge_pct_row)
+
+    # Build final enriched with per-row margins
+    enriched_rows = []
+    for i, row in df_for_export.iterrows():
+        marge = row.get("_marge_override") or margin_pct
+        single = enrich_dataframe(
+            pd.DataFrame([row.drop("_marge_override", errors="ignore")]),
+            marge, target_currency, rates,
+        )
+        enriched_rows.append(single)
+    enriched = pd.concat(enriched_rows, ignore_index=True)
     st.session_state["enriched_df"] = enriched
 
-    display_cols = [
-        "product_name", "sku", "currency", "qty",
-        "ek_unit_target", "ek_target", "margin_actual",
-        "vk_unit_target", "vk_target",
-    ]
-    display_cols = [c for c in display_cols if c in enriched.columns]
-    display_df = enriched[display_cols].copy()
-
-    def _color_margin(val):
-        if pd.isna(val):
-            return "color: gray"
-        if val >= 20:
-            return "color: green; font-weight:bold"
-        if val >= 10:
-            return "color: orange; font-weight:bold"
-        return "color: red; font-weight:bold"
-
-    styled = display_df.style.applymap(_color_margin, subset=["margin_actual"])
-    st.dataframe(styled, use_container_width=True)
-
+    # Summary metrics
+    ek_total  = enriched["ek_target"].sum(skipna=True)
+    vk_total  = enriched["vk_target"].sum(skipna=True)
+    avg_marg  = enriched["margin_actual"].mean(skipna=True)
     col_s1, col_s2, col_s3 = st.columns(3)
-    ek_total = enriched["ek_target"].sum(skipna=True)
-    vk_total = enriched["vk_target"].sum(skipna=True)
-    avg_marg = enriched["margin_actual"].mean(skipna=True)
     col_s1.metric(f"Total EK ({target_currency})", f"{ek_total:,.2f}")
     col_s2.metric(f"Total VK ({target_currency})", f"{vk_total:,.2f}")
     col_s3.metric("Ø Marge %", f"{avg_marg:.1f}%" if not pd.isna(avg_marg) else "–")
