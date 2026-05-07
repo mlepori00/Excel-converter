@@ -29,22 +29,23 @@ NO_BORDER   = Border()
 _ASSETS = Path(__file__).resolve().parent.parent.parent.parent / "assets"
 
 OUTPUT_COLUMNS = [
-    ("Pos",        "pos"),
-    ("Bezeichnung","product_name"),
-    ("SKU",        "sku"),
-    ("EAN",        "ean"),
-    ("Grösse",     "size"),
-    ("Farbe",      "color"),
-    ("Kategorie",  "category"),
-    ("Menge",      "qty"),
-    ("EK/Stk",     "ek_unit_target"),
-    ("EK Total",   "ek_target"),
-    ("Marge %",    "margin_actual"),
-    ("VK/Stk",     "vk_unit_target"),
-    ("VK Total",   "vk_target"),
-    ("Währung",    "currency"),
-    ("Notizen",    "notes"),
-    ("Zusatzinfos","extra_fields"),
+    ("Pos",           "pos"),
+    ("Bezeichnung",   "product_name"),
+    ("SKU",           "sku"),
+    ("EAN",           "ean"),
+    ("Grösse",        "size"),
+    ("Farbe",         "color"),
+    ("Kategorie",     "category"),
+    ("Bestellt",      "qty"),
+    ("Max. verfügbar","available_qty"),
+    ("EK/Stk",        "ek_unit_target"),
+    ("EK Total",      "ek_target"),
+    ("Marge %",       "margin_actual"),
+    ("VK/Stk",        "vk_unit_target"),
+    ("VK Total",      "vk_target"),
+    ("Währung",       "currency"),
+    ("Notizen",       "notes"),
+    ("Zusatzinfos",   "extra_fields"),
 ]
 
 N_COLS = len(OUTPUT_COLUMNS)
@@ -295,7 +296,7 @@ def build_excel(
                     cell.font = Font(name="Calibri", size=10, bold=True, color=fg)
                 except (TypeError, ValueError):
                     pass
-            elif field == "qty":
+            elif field in ("qty", "available_qty"):
                 cell.number_format = "0"
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             elif field in ("pos", "sku", "ean"):
@@ -335,6 +336,13 @@ def build_excel(
         qty_c.number_format = "0"
         qty_c.alignment     = Alignment(horizontal="center", vertical="center")
 
+        if "available_qty" in col_map:
+            avail_letter = get_column_letter(col_map["available_qty"])
+            avail_c = ws.cell(row=total_row, column=col_map["available_qty"])
+            avail_c.value         = f"=SUM({avail_letter}{ek_start}:{avail_letter}{ek_end})"
+            avail_c.number_format = "0"
+            avail_c.alignment     = Alignment(horizontal="center", vertical="center")
+
         ek_c = ws.cell(row=total_row, column=col_map["ek_target"])
         ek_c.value         = f"=SUM({ek_letter}{ek_start}:{ek_letter}{ek_end})"
         ek_c.number_format = f'#,##0.00\\ "{target_currency}"'
@@ -353,7 +361,7 @@ def build_excel(
 
     col_widths = {
         "pos": 5, "product_name": 38, "sku": 14, "ean": 16,
-        "size": 8, "color": 13, "category": 14, "qty": 8,
+        "size": 8, "color": 13, "category": 14, "qty": 9, "available_qty": 14,
         "ek_unit_target": 12, "ek_target": 13, "margin_actual": 10,
         "vk_unit_target": 12, "vk_target": 13,
         "currency": 9, "notes": 22, "extra_fields": 32,

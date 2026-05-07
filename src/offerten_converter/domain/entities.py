@@ -19,6 +19,7 @@ class LineItem:
     unit_price: Optional[float] = None
     currency: Optional[str] = None
     ordered_qty: Optional[int] = None
+    available_qty: Optional[int] = None
     min_qty: Optional[int] = None
     discount_pct: Optional[float] = None
     notes: Optional[str] = None
