@@ -615,6 +615,9 @@ def render():
         enriched_rows.append(enriched_row)
 
     enriched = pd.concat(enriched_rows, ignore_index=True)
+    enriched["market_price"] = enriched["ean"].apply(
+        lambda ean: market_prices.get(str(ean).strip()) if ean else None
+    )
     st.session_state["enriched_df"] = enriched
 
     if "_unknown_currency" in enriched.columns:

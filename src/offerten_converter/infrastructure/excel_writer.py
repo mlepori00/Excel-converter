@@ -43,6 +43,7 @@ OUTPUT_COLUMNS = [
     ("Marge %",       "margin_actual"),
     ("VK/Stk",        "vk_unit_target"),
     ("VK Total",      "vk_target"),
+    ("Marktpreis CHF","market_price"),
     ("Währung",       "currency"),
     ("Notizen",       "notes"),
     ("Zusatzinfos",   "extra_fields"),
@@ -293,6 +294,9 @@ def build_excel(
             if field in ("ek_unit_target", "ek_target", "vk_unit_target", "vk_target"):
                 cell.number_format = f'#,##0.00\\ "{target_currency}"'
                 cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif field == "market_price":
+                cell.number_format = '#,##0.00\\ "CHF"'
+                cell.alignment = Alignment(horizontal="right", vertical="center")
             elif field == "margin_actual":
                 cell.number_format = '0.00"%"'
                 cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -370,6 +374,7 @@ def build_excel(
         "size": 8, "color": 13, "category": 14, "qty": 9, "available_qty": 14,
         "ek_unit_target": 12, "ek_target": 13, "margin_actual": 10,
         "vk_unit_target": 12, "vk_target": 13,
+        "market_price": 14,
         "currency": 9, "notes": 22, "extra_fields": 32,
     }
     for col_idx, (_, field) in enumerate(OUTPUT_COLUMNS, start=1):
