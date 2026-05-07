@@ -43,22 +43,23 @@ class TestBuildExcel:
         data = build_excel(sample_df, "Test GmbH", "Tester", "CHF")
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Offerte"]
-        header_row = 6
+        header_row = 7
         filled_cols = sum(
             1 for col in range(1, 50) if ws.cell(row=header_row, column=col).value
         )
         assert filled_cols == len(OUTPUT_COLUMNS)
+        assert ws.cell(row=header_row, column=1).value == "Pos"
 
     def test_meta_header(self, sample_df):
         data = build_excel(sample_df, "Sport AG", "Max", "EUR", 60)
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Offerte"]
-        assert ws.cell(row=1, column=2).value == "Sport AG"
-        assert ws.cell(row=3, column=2).value == "Max"
+        assert ws.cell(row=4, column=5).value == "Sport AG"
+        assert ws.cell(row=5, column=5).value == "Max"
 
     def test_total_row_exists(self, sample_df):
         data = build_excel(sample_df, "Test", "T", "CHF")
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Offerte"]
-        # TOTAL should be in row 8 (row 6 header + 1 data row + 1 total)
-        assert ws.cell(row=8, column=1).value == "TOTAL"
+        # TOTAL should be in row 9 (row 7 header + 1 data row + 1 total)
+        assert ws.cell(row=9, column=1).value == "TOTAL"

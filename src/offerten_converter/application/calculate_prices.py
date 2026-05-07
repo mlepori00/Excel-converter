@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 import logging
 
 import pandas as pd
-
-logger = logging.getLogger(__name__)
 
 from offerten_converter.domain.pricing import (
     DEFAULT_RATES,
@@ -17,6 +13,29 @@ from offerten_converter.domain.pricing import (
     convert_to_target,
     margin_color,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_positive_float(value) -> float | None:
+    """Return a positive finite float, or None for blank/NaN/invalid values."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = float(text)
+    except (ValueError, TypeError):
+        return None
+    if pd.isna(parsed) or parsed <= 0:
+        return None
+    return parsed
 
 
 def enrich_dataframe(
@@ -47,7 +66,6 @@ def enrich_dataframe(
         price = row.get("unit_price")
         currency = str(row.get("currency") or "CHF").upper()
         disc_pct = row.get("discount_pct") or 0
-        min_qty = row.get("min_qty")
         ordered_qty = row.get("ordered_qty")
 
         try:
@@ -62,19 +80,7 @@ def enrich_dataframe(
             disc_f = 0.0
 
         qty_fallback_used = False
-        try:
-            qty_raw = float(ordered_qty)
-            if qty_raw <= 0:
-                qty_f = 1.0
-                qty_fallback_used = True
-            else:
-                qty_f = qty_raw
-        except (TypeError, ValueError):
-            try:
-                qty_f = max(1.0, float(min_qty))
-            except (TypeError, ValueError):
-                qty_f = 1.0
-            qty_fallback_used = True
+        qty_f = _parse_positive_float(ordered_qty)
 
         # Per-unit cost after discount, capped to avoid negative prices
         disc_f = max(0.0, min(disc_f, 100.0))
@@ -82,7 +88,7 @@ def enrich_dataframe(
         # Convert unit cost to target currency
         ek_unit_conv, currency_unknown = convert_to_target(ek_unit, currency, target_currency, r)
         # Total = unit cost × quantity
-        ek_total = ek_unit_conv * qty_f if ek_unit_conv is not None else None
+        ek_total = ek_unit_conv * qty_f if ek_unit_conv is not None and qty_f is not None else None
 
         manual_vk = row.get("vk_target") if "vk_target" in row.index else None
         try:
@@ -97,11 +103,11 @@ def enrich_dataframe(
 
         # VK per unit, then total
         vk_unit = manual_vk_f if manual_vk_f is not None else calculate_vk(ek_unit_conv, margin)
-        vk_total = vk_unit * qty_f if vk_unit is not None else None
+        vk_total = vk_unit * qty_f if vk_unit is not None and qty_f is not None else None
 
         marg = actual_margin(ek_unit_conv, vk_unit)
 
-        qty_list.append(int(qty_f))
+        qty_list.append(int(qty_f) if qty_f is not None else None)
         qty_fallback_list.append(qty_fallback_used)
         unknown_currency_list.append(currency_unknown)
         ek_unit_target_list.append(round(ek_unit_conv, 4) if ek_unit_conv is not None else None)

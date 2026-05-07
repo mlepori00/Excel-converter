@@ -18,10 +18,10 @@ def export_to_excel(
 ) -> bytes:
     """Build and return a formatted Excel file as bytes.
 
-    If *build_fn* is None, falls back to the default infrastructure builder.
+    The concrete Excel builder is injected by the composition layer.
     """
     if build_fn is None:
-        from offerten_converter.infrastructure.excel_writer import build_excel
-
-        build_fn = build_excel
+        raise RuntimeError(
+            "Kein Excel-Builder übergeben. Bitte build_fn via Dependency Injection setzen."
+        )
     return build_fn(df, supplier_name, created_by, target_currency, valid_days)

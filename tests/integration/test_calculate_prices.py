@@ -9,7 +9,16 @@ from offerten_converter.application.calculate_prices import enrich_dataframe
 class TestEnrichDataframe:
     def test_adds_all_columns(self, sample_line_items_df):
         result = enrich_dataframe(sample_line_items_df, 40.0, "CHF")
-        for col in ["qty", "ek_unit_target", "ek_target", "vk_unit_target", "vk_target", "margin_actual", "margin_color_val"]:
+        expected_columns = [
+            "qty",
+            "ek_unit_target",
+            "ek_target",
+            "vk_unit_target",
+            "vk_target",
+            "margin_actual",
+            "margin_color_val",
+        ]
+        for col in expected_columns:
             assert col in result.columns
 
     def test_discount_applied(self):
@@ -29,8 +38,6 @@ class TestEnrichDataframe:
             "ordered_qty": 10, "min_qty": None,
         }])
         result = enrich_dataframe(df, 40.0, "CHF")
-        # Unit price after discount (EUR) = 24.90 * 0.95 = 23.655
-        expected_ek_unit_eur = 24.90 * 0.95
         # Total = unit × 10, converted to CHF
         assert result.iloc[0]["qty"] == 10
         assert result.iloc[0]["ek_target"] == pytest.approx(

@@ -54,9 +54,12 @@ N_COLS = len(OUTPUT_COLUMNS)
 # ── Style helpers ─────────────────────────────────────────────────────────────
 
 def _apply(cell, font=None, fill=None, alignment=None, border=THIN_BORDER):
-    if font:      cell.font      = font
-    if fill:      cell.fill      = fill
-    if alignment: cell.alignment = alignment
+    if font:
+        cell.font = font
+    if fill:
+        cell.fill = fill
+    if alignment:
+        cell.alignment = alignment
     if border is not None:
         cell.border = border
 
@@ -218,8 +221,11 @@ def build_excel(
     #  Split columns into 4 equal chunks: L-label | L-val | R-label | R-val
     q = max(N_COLS // 4, 2)
     meta = [
-        (("Lieferant:",    supplier_name),         ("Datum:",      today.strftime("%d.%m.%Y"))),
-        (("Erstellt von:", created_by or "AMP Sport GmbH"), ("Gültig bis:", valid_until.strftime("%d.%m.%Y"))),
+        (("Lieferant:", supplier_name), ("Datum:", today.strftime("%d.%m.%Y"))),
+        (
+            ("Erstellt von:", created_by or "AMP Sport GmbH"),
+            ("Gültig bis:", valid_until.strftime("%d.%m.%Y")),
+        ),
     ]
     for i, ((ll, lv), (rl, rv)) in enumerate(meta, start=4):
         ws.row_dimensions[i].height = 17

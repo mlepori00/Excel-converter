@@ -10,6 +10,7 @@ from offerten_converter.application.calculate_prices import enrich_dataframe
 from offerten_converter.application.export_quotation import export_to_excel
 from offerten_converter.application.extract_products import extract_line_items
 from offerten_converter.application.sanitize_data import sanitize_dataframe
+from offerten_converter.infrastructure.excel_writer import build_excel
 
 
 def _fake_call_fn(user_content: str, system_prompt: str, api_key: str) -> str:
@@ -99,6 +100,7 @@ def test_full_pipeline_sanitize_extract_price_export():
         created_by="Test AG",
         target_currency="CHF",
         valid_days=30,
+        build_fn=build_excel,
     )
     assert isinstance(excel_bytes, bytes)
     assert len(excel_bytes) > 1000  # realistic Excel file size
@@ -131,7 +133,7 @@ def test_pipeline_with_manual_vk_override():
     assert enriched.iloc[0]["vk_target"] == 250.0
 
     excel_bytes = export_to_excel(
-        enriched, "Test Supplier", "Test AG", "CHF", 30,
+        enriched, "Test Supplier", "Test AG", "CHF", 30, build_fn=build_excel,
     )
     assert isinstance(excel_bytes, bytes)
     assert excel_bytes[:2] == b"PK"

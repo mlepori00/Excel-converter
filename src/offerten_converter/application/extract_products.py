@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -23,10 +22,10 @@ SYSTEM_PROMPT = (
     "Standard fields: sku, ean, product_name, size, color, category, "
     "unit_price (number, price per single piece), "
     "currency (ISO), "
-    "ordered_qty (int, the quantity actually ordered or requested in this transaction. "
-    "Look for columns named ORDER, BESTELLUNG, QTY ORDERED, QUANTITY ORDERED, ORDERED. "
-    "Use the exact value, even if 0. Never substitute 0 with 1. "
-    "If no order-quantity column exists, use null – do NOT use stock or availability numbers here), "
+    "ordered_qty (int or null, customer order quantity only. "
+    "In availability/offersheets, ORDER/BESTELLUNG columns are usually customer-entry "
+    "fields and must be null when blank or 0. Never use stock, availability, max qty, "
+    "size-matrix cells, or total stock numbers as ordered_qty), "
     "available_qty (int, the available stock or inventory quantity. "
     "Look for columns named AVAILABLE, TOTAL, STOCK, LAGER, VERFÜGBAR, QTY AVAILABLE, BESTAND. "
     "If no availability column exists, use null), "
@@ -151,14 +150,14 @@ def _calculate_chunk_size(text: str) -> int:
     import re
 
     lines = text.splitlines()
-    data_lines = [l for l in lines[1:] if l.strip()]  # skip header + blanks
+    data_lines = [line for line in lines[1:] if line.strip()]  # skip header + blanks
     if not data_lines:
         return CHUNK_SIZE
 
     sample = data_lines[:20]
     # Collapse consecutive whitespace → single space to get real content length
-    compressed = [re.sub(r" {2,}", " ", l).strip() for l in sample]
-    avg_chars = sum(len(l) for l in compressed) / len(compressed)
+    compressed = [re.sub(r" {2,}", " ", line).strip() for line in sample]
+    avg_chars = sum(len(line) for line in compressed) / len(compressed)
 
     # Estimate output tokens: JSON wraps each row with field names + structure
     output_tokens_per_row = (avg_chars * _JSON_OVERHEAD) / _CHARS_PER_TOKEN
@@ -225,23 +224,14 @@ def extract_line_items(
 
     Returns (items, usage) where usage = {"input_tokens": int, "output_tokens": int}.
     call_fn must return (text, input_tokens, output_tokens).
-    If call_fn is None, auto-detects provider from key prefix.
+    The composition layer must inject call_fn.
     """
-    key = api_key or os.getenv("ANTHROPIC_API_KEY") or ""
-    if not key:
-        raise RuntimeError("Kein API-Key gefunden. Bitte ANTHROPIC_API_KEY in .env setzen.")
-
     if call_fn is None:
-        if key.startswith("sk-or-"):
-            from offerten_converter.infrastructure.ai_extractors.openrouter_extractor import (
-                call_openrouter,
-            )
-            call_fn = call_openrouter
-        else:
-            from offerten_converter.infrastructure.ai_extractors.anthropic_extractor import (
-                call_anthropic,
-            )
-            call_fn = call_anthropic
+        raise RuntimeError(
+            "Kein AI-Adapter übergeben. Bitte call_fn via Dependency Injection setzen."
+        )
+
+    key = api_key or ""
 
     base_content = sanitized_text
     if column_hints:

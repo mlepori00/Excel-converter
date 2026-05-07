@@ -36,6 +36,7 @@ def clear_extraction():
     st.session_state["extraction_error"] = None
     st.session_state["market_prices"] = {}
     st.session_state["market_prices_fetched"] = False
+    st.session_state["force_api_extract"] = False
 
 
 def get_settings() -> dict:

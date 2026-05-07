@@ -23,6 +23,17 @@ def file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
 
+def cache_key(file_bytes: bytes, sheet_name: str | None = None, version: str = "v2") -> str:
+    """Return a stable cache key for one uploaded file and selected sheet."""
+    digest = hashlib.sha256()
+    digest.update(version.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update((sheet_name or "").encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(file_bytes)
+    return digest.hexdigest()
+
+
 def _cache_path(key: str) -> Path:
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return _CACHE_DIR / f"{key}.json"
@@ -48,7 +59,8 @@ def save(key: str, df: pd.DataFrame) -> None:
     try:
         path = _cache_path(key)
         with path.open("w", encoding="utf-8") as f:
-            json.dump(df.where(pd.notna(df), other=None).to_dict(orient="records"), f, ensure_ascii=False)
+            records = df.where(pd.notna(df), other=None).to_dict(orient="records")
+            json.dump(records, f, ensure_ascii=False)
         _evict_oldest()
     except Exception as exc:
         logger.warning("Cache save failed: %s", exc)

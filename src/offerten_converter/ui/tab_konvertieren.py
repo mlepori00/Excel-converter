@@ -1,12 +1,10 @@
-"""Tab 1: Konvertieren – Upload → Extract → Price → Export."""
+"""Tab 1: Konvertieren - Upload -> Extract -> Price -> Export."""
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
-from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -18,6 +16,14 @@ from offerten_converter.application.export_quotation import export_to_excel
 from offerten_converter.application.extract_products import extract_line_items
 from offerten_converter.application.manage_profiles import profile_to_hints
 from offerten_converter.application.sanitize_data import sanitize_dataframe
+from offerten_converter.infrastructure import extraction_cache
+from offerten_converter.infrastructure.ai_extractors import get_call_fn
+from offerten_converter.infrastructure.excel_reader import (
+    get_recommended_sheet_name,
+    get_sheet_names,
+    read_offer_file,
+)
+from offerten_converter.infrastructure.excel_writer import build_excel
 from offerten_converter.infrastructure.file_profile_repo import FileProfileRepository
 from offerten_converter.ui.state import clear_extraction, get_settings
 
@@ -30,270 +36,95 @@ _EAN_ALIASES = frozenset([
     "ean nr", "ean-nr", "artikel ean",
 ])
 
-# Pricing per 1M tokens (USD)
-_PRICE_INPUT_PER_M  = 15.0
+_PRICE_INPUT_PER_M = 15.0
 _PRICE_OUTPUT_PER_M = 75.0
-_CHARS_PER_TOKEN    = 4
-
-# Size detection
-_SHOE_SIZE_RANGE = (20, 55)
-_TEXT_SIZES = frozenset([
-    "XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL",
-    "2XL", "3XL", "4XL", "5XL", "ONE SIZE",
-])
-
-
-@dataclass
-class ReadResult:
-    df: pd.DataFrame
-    metadata_hints: dict[str, Any] = field(default_factory=dict)
-    was_unpivoted: bool = False
-    unpivot_info: str = ""
-
-
-# ── File reading helpers ───────────────────────────────────────────────────────
-
-def _detect_header_row(df_raw: pd.DataFrame, max_scan: int = 50) -> int:
-    """Find the best header row using a scoring approach.
-
-    Scores each candidate row and returns the one that looks most like a header:
-    - Prefers rows with many unique string values
-    - Tolerates mixed rows (e.g. 'SKU | Price | Qty' where Price/Qty are numeric labels)
-    - Ignores completely empty rows
-    - Falls back to row 0 if nothing convincing is found
-    """
-    n_cols = len(df_raw.columns)
-    min_fill = max(2, int(n_cols * 0.4))  # lowered from 0.75 to handle sparse headers
-    best_row = 0
-    best_score = -1
-
-    for i in range(min(len(df_raw), max_scan)):
-        row = df_raw.iloc[i]
-        non_null = [v for v in row if v is not None and not (isinstance(v, float) and pd.isna(v))]
-        if len(non_null) < min_fill:
-            continue
-
-        str_vals = [v for v in non_null if isinstance(v, str) and str(v).strip()]
-        unique_str = set(str(v).strip().lower() for v in str_vals)
-
-        # Score: ratio of string values + bonus for uniqueness + bonus for typical header keywords
-        header_keywords = {
-            "sku", "ean", "name", "artikel", "price", "preis", "qty", "menge",
-            "color", "farbe", "size", "grösse", "groesse", "description",
-            "bezeichnung", "quantity", "discount", "rabatt", "upc", "gtin",
-            "num", "id", "style", "gender", "family", "wholesale", "retail",
-        }
-        keyword_hits = sum(1 for w in unique_str if any(kw in w for kw in header_keywords))
-        str_ratio = len(str_vals) / len(non_null) if non_null else 0
-        uniqueness = len(unique_str) / len(str_vals) if str_vals else 0
-        score = str_ratio * 0.4 + uniqueness * 0.3 + min(keyword_hits / 3, 1.0) * 0.3
-
-        if score > best_score:
-            best_score = score
-            best_row = i
-
-        # Early exit: very confident header found
-        if score >= 0.7:
-            return i
-
-    return best_row
+_CHARS_PER_TOKEN = 4
+_LOCAL_EXTRACTION_COLUMNS = [
+    "sku",
+    "ean",
+    "product_name",
+    "size",
+    "color",
+    "category",
+    "unit_price",
+    "currency",
+    "ordered_qty",
+    "available_qty",
+    "availability_status",
+    "min_qty",
+    "discount_pct",
+    "notes",
+    "extra_fields",
+]
 
 
-def _detect_currency_from_formats(file_bytes: bytes, sheet_name: str | None = None) -> str | None:
-    """Scan Excel number formats for currency symbols and return ISO code.
-
-    Handles formats like:
-      #,##0.00\ "€"   → EUR
-      #,##0.00\ "CHF" → CHF
-      [$USD]          → USD
-      [$£-809]        → GBP
-    """
-    import openpyxl, re
-
-    _FORMAT_MAP = [
-        (r'CHF',        "CHF"),
-        (r'\bFR\b',     "CHF"),
-        (r'€|EUR',      "EUR"),
-        (r'\$(?![\w])', "USD"),  # $ not followed by letters (avoids $CHF etc.)
-        (r'USD',        "USD"),
-        (r'£|GBP',      "GBP"),
-        (r'NOK',        "NOK"),
-        (r'SEK',        "SEK"),
-        (r'DKK',        "DKK"),
-        (r'GBP',        "GBP"),
-    ]
-
+def _read_uploaded_file(uploaded_file):
+    """Read an uploaded file while keeping Streamlit concerns in the UI layer."""
+    raw_bytes = uploaded_file.getvalue()
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-        ws = wb[sheet_name] if sheet_name else wb.active
-
-        formats_seen: dict[str, int] = {}
-        for row in ws.iter_rows():
-            for cell in row:
-                fmt = cell.number_format or ""
-                if fmt in ("General", "@", ""):
-                    continue
-                for pattern, iso in _FORMAT_MAP:
-                    if re.search(pattern, fmt, re.IGNORECASE):
-                        formats_seen[iso] = formats_seen.get(iso, 0) + 1
-                        break
-
-        if not formats_seen:
-            return None
-        # Return the most common currency found
-        return max(formats_seen, key=lambda k: formats_seen[k])
-
-    except Exception:
-        return None
-
-
-def _unmerge_cells(file_bytes: bytes, sheet_name: str | None = None) -> bytes:
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    ws = wb[sheet_name] if sheet_name else wb.active
-    if not ws.merged_cells.ranges:
-        return file_bytes
-    for merge_range in list(ws.merged_cells.ranges):
-        min_col, min_row, max_col, max_row = merge_range.bounds
-        top_left_value = ws.cell(min_row, min_col).value
-        ws.unmerge_cells(str(merge_range))
-        for r in range(min_row, max_row + 1):
-            for c in range(min_col, max_col + 1):
-                ws.cell(r, c).value = top_left_value
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.read()
-
-
-def _extract_metadata_hints(df_raw: pd.DataFrame, header_row: int) -> dict[str, Any]:
-    hints: dict[str, Any] = {}
-    for i in range(header_row):
-        row_text = " ".join(
-            str(v) for v in df_raw.iloc[i] if v is not None and str(v).strip()
-        ).upper()
-        curr_match = re.search(
-            r"(?:CURRENCY|WÄHRUNG|WAEHRUNG)\s*[=:]\s*(USD|EUR|CHF|GBP)", row_text,
-        )
-        if curr_match:
-            hints["detected_currency"] = curr_match.group(1)
-    return hints
-
-
-def _detect_size_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
-    size_cols: list[str] = []
-    other_cols: list[str] = []
-    for col in df.columns:
-        try:
-            val = float(col)
-            if _SHOE_SIZE_RANGE[0] <= val <= _SHOE_SIZE_RANGE[1]:
-                size_cols.append(col)
-            else:
-                other_cols.append(col)
-        except (ValueError, TypeError):
-            other_cols.append(col)
-    if len(size_cols) >= 3:
-        return size_cols, other_cols
-    size_cols, other_cols = [], []
-    for col in df.columns:
-        if str(col).upper().strip() in _TEXT_SIZES:
-            size_cols.append(col)
-        else:
-            other_cols.append(col)
-    if len(size_cols) >= 3:
-        return size_cols, other_cols
-    return [], list(df.columns)
-
-
-def _unpivot_sizes(df: pd.DataFrame, size_cols: list[str], other_cols: list[str]) -> pd.DataFrame:
-    melted = df.melt(id_vars=other_cols, value_vars=size_cols,
-                     var_name="_size_from_col", value_name="_qty_from_col")
-    melted["_qty_from_col"] = pd.to_numeric(melted["_qty_from_col"], errors="coerce")
-    melted = melted[melted["_qty_from_col"].notna() & (melted["_qty_from_col"] > 0)]
-    return melted.reset_index(drop=True)
-
-
-def _read_uploaded_file(uploaded_file) -> ReadResult:
-    name = uploaded_file.name.lower()
-    raw_bytes = uploaded_file.read()
-
-    if name.endswith(".csv"):
-        for sep in (",", ";", "\t"):
-            try:
-                df = pd.read_csv(io.BytesIO(raw_bytes), sep=sep, dtype=str)
-                if len(df.columns) > 1:
-                    return ReadResult(df=df)
-            except Exception:
-                continue
-        return ReadResult(df=pd.read_csv(io.BytesIO(raw_bytes), dtype=str))
-
-    try:
-        if name.endswith(".xlsx"):
-            import openpyxl
-            wb_check = openpyxl.load_workbook(io.BytesIO(raw_bytes))
-            ws_check = wb_check.active
-            has_merged = bool(ws_check.merged_cells.ranges)
-            sheet_names = wb_check.sheetnames
-            wb_check.close()
-        else:
-            has_merged = False
-            xl_tmp = pd.ExcelFile(io.BytesIO(raw_bytes))
-            sheet_names = xl_tmp.sheet_names
-
-        chosen = sheet_names[0]
+        sheet_names = get_sheet_names(raw_bytes, uploaded_file.name)
+        recommended = get_recommended_sheet_name(raw_bytes, uploaded_file.name)
+        chosen = recommended or (sheet_names[0] if sheet_names else None)
         if len(sheet_names) > 1:
-            chosen = st.selectbox("Tabellenblatt auswählen:", sheet_names, key="sheet_select")
-
-        if has_merged:
-            processed_bytes = _unmerge_cells(raw_bytes, chosen)
-            st.caption("📐 Zusammengeführte Zellen wurden aufgelöst.")
-        else:
-            processed_bytes = raw_bytes
-
-        xl = pd.ExcelFile(io.BytesIO(processed_bytes))
-        df_raw = xl.parse(chosen, header=None)
-        header_row = _detect_header_row(df_raw)
-        metadata_hints = _extract_metadata_hints(df_raw, header_row)
-
-        df = xl.parse(chosen, header=header_row, dtype=str)
-        df = df.dropna(how="all").reset_index(drop=True)
-        df = df[[c for c in df.columns
-                  if not (str(c).startswith("Unnamed:") and df[c].isna().all())]]
-
-        size_cols, other_cols = _detect_size_columns(df)
-        was_unpivoted = False
-        unpivot_info = ""
-        if size_cols:
-            original_rows = len(df)
-            df = _unpivot_sizes(df, size_cols, other_cols)
-            was_unpivoted = True
-            unpivot_info = (
-                f"Grössen-Spalten erkannt ({len(size_cols)} Grössen: "
-                f"{size_cols[0]}–{size_cols[-1]}). "
-                f"{original_rows} Zeilen → {len(df)} Varianten-Zeilen (Unpivot)."
-            )
-            st.success(f"📊 {unpivot_info}")
-
-        # Detect currency from Excel number formats (e.g. #,##0.00 "€")
-        format_currency = _detect_currency_from_formats(raw_bytes, chosen)
-        if format_currency and not metadata_hints.get("detected_currency"):
-            metadata_hints["detected_currency"] = format_currency
-
-        if metadata_hints.get("detected_currency"):
-            st.info(
-                f"💱 Währung erkannt: "
-                f"**{metadata_hints['detected_currency']}**"
+            index = sheet_names.index(chosen) if chosen in sheet_names else 0
+            chosen = st.selectbox(
+                "Tabellenblatt auswählen:",
+                sheet_names,
+                index=index,
+                key="sheet_select",
             )
 
-        return ReadResult(df=df, metadata_hints=metadata_hints,
-                          was_unpivoted=was_unpivoted, unpivot_info=unpivot_info)
+        result = read_offer_file(raw_bytes, uploaded_file.name, chosen)
+        if result.was_unpivoted:
+            st.success(f"{result.unpivot_info}")
 
+        detected_currency = result.metadata_hints.get("detected_currency")
+        if detected_currency:
+            st.info(f"Währung erkannt: **{detected_currency}**")
+        layout_type = result.metadata_hints.get("layout_type")
+        if layout_type:
+            st.caption(f"Erkannte Offerten-Struktur: **{layout_type}**")
+
+        return result
     except Exception as exc:
         st.error(f"Fehler beim Lesen der Datei: {exc}")
         st.stop()
 
 
-# ── Market price helpers ───────────────────────────────────────────────────────
+def _load_cached_extraction(file_bytes: bytes, result) -> pd.DataFrame | None:
+    source_sheet = result.metadata_hints.get("source_sheet")
+    keys = [
+        extraction_cache.cache_key(file_bytes, source_sheet),
+        extraction_cache.file_hash(file_bytes),
+    ]
+    for key in keys:
+        cached = extraction_cache.load(key)
+        if cached is not None and not cached.empty:
+            return _enforce_import_truth(cached, result.df)
+    return None
+
+
+def _save_cached_extraction(file_bytes: bytes, result, df_extracted: pd.DataFrame) -> None:
+    source_sheet = result.metadata_hints.get("source_sheet")
+    extraction_cache.save(extraction_cache.cache_key(file_bytes, source_sheet), df_extracted)
+    extraction_cache.save(extraction_cache.file_hash(file_bytes), df_extracted)
+
+
+def _sanitize_prompt_hints(hints: str, blocked_terms: list[str] | None = None) -> str:
+    """Sanitize profile/metadata hints before adding them to an AI prompt."""
+    if not hints:
+        return ""
+    df_hints = pd.DataFrame({"hints": [hints]})
+    clean_hints, log = sanitize_dataframe(df_hints)
+    cleaned = str(clean_hints.iloc[0]["hints"])
+    for term in blocked_terms or []:
+        term = str(term or "").strip()
+        if term:
+            cleaned = cleaned.replace(term, "[REDACTED]")
+    if log:
+        st.caption(f"{len(log)} sensible Angabe(n) aus Profil-/Spalten-Hinweisen entfernt.")
+    return cleaned
+
 
 def _fetch_market_prices_once(extracted_df: pd.DataFrame) -> None:
     if st.session_state.get("market_prices_fetched"):
@@ -311,9 +142,14 @@ def _fetch_market_prices_once(extracted_df: pd.DataFrame) -> None:
     if ean_col is None:
         return
 
-    eans = (extracted_df[ean_col].dropna().astype(str).str.strip()
-            .replace({"nan": "", "None": ""}))
-    unique_eans = [e for e in eans.unique() if e]
+    eans = (
+        extracted_df[ean_col]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+    unique_eans = [ean for ean in eans.unique() if ean]
     if not unique_eans:
         return
 
@@ -324,10 +160,11 @@ def _fetch_market_prices_once(extracted_df: pd.DataFrame) -> None:
 
     scraper = ToppreiseScraper()
     prices: dict[str, float] = {}
-    progress = st.progress(0, text="Marktpreise werden geladen …")
+    progress = st.progress(0, text="Marktpreise werden geladen ...")
     status = st.empty()
 
     import time
+
     for i, ean in enumerate(unique_eans):
         status.caption(f"EAN {ean} ({i + 1}/{len(unique_eans)})")
         price = scraper.fetch_price(ean)
@@ -341,35 +178,122 @@ def _fetch_market_prices_once(extracted_df: pd.DataFrame) -> None:
     status.empty()
     st.session_state["market_prices"] = prices
     if prices:
-        st.success(f"✅ Marktpreise geladen: {len(prices)}/{len(unique_eans)} EANs gefunden.")
+        st.success(f"Marktpreise geladen: {len(prices)}/{len(unique_eans)} EANs gefunden.")
 
-
-# ── API cost estimate ──────────────────────────────────────────────────────────
 
 def _api_cost_caption(text: str, n_chunks: int) -> None:
-    from offerten_converter.application.extract_products import SYSTEM_PROMPT, _calculate_chunk_size
-    system_tokens   = len(SYSTEM_PROMPT) // _CHARS_PER_TOKEN
-    content_tokens  = len(text) // _CHARS_PER_TOKEN
-    chunk_tokens    = content_tokens // max(n_chunks, 1)
-    total_input     = (system_tokens + chunk_tokens) * n_chunks
-    lines           = text.splitlines()
-    data_lines      = [l for l in lines[1:] if l.strip()]
-    sample          = data_lines[:20]
-    compressed      = [re.sub(r" {2,}", " ", l).strip() for l in sample]
-    avg_chars       = sum(len(l) for l in compressed) / max(len(compressed), 1)
-    total_output    = int(len(data_lines) * avg_chars * 3.0 / _CHARS_PER_TOKEN)
-    cost_usd        = (total_input / 1_000_000 * _PRICE_INPUT_PER_M
-                       + total_output / 1_000_000 * _PRICE_OUTPUT_PER_M)
-    cost_chf        = cost_usd * 0.89
+    from offerten_converter.application.extract_products import SYSTEM_PROMPT
+
+    system_tokens = len(SYSTEM_PROMPT) // _CHARS_PER_TOKEN
+    content_tokens = len(text) // _CHARS_PER_TOKEN
+    chunk_tokens = content_tokens // max(n_chunks, 1)
+    total_input = (system_tokens + chunk_tokens) * n_chunks
+    lines = text.splitlines()
+    data_lines = [line for line in lines[1:] if line.strip()]
+    sample = data_lines[:20]
+    compressed = [re.sub(r" {2,}", " ", line).strip() for line in sample]
+    avg_chars = sum(len(line) for line in compressed) / max(len(compressed), 1)
+    total_output = int(len(data_lines) * avg_chars * 3.0 / _CHARS_PER_TOKEN)
+    cost_usd = (
+        total_input / 1_000_000 * _PRICE_INPUT_PER_M
+        + total_output / 1_000_000 * _PRICE_OUTPUT_PER_M
+    )
+    cost_chf = cost_usd * 0.89
     st.caption(f"Geschätzte API-Kosten: ca. **CHF {cost_chf:.3f}**")
 
 
-# ── Main render ────────────────────────────────────────────────────────────────
+def _metadata_hints(result: Any) -> list[str]:
+    extra = []
+    if result.metadata_hints.get("layout_type"):
+        extra.append(f"Detected offer layout: {result.metadata_hints['layout_type']}.")
+    if result.metadata_hints.get("column_mapping"):
+        extra.append(f"Canonical column mapping: {result.metadata_hints['column_mapping']}.")
+    if result.was_unpivoted:
+        extra.append(
+            "Data was unpivoted: '_size_from_col' = size, "
+            "'_qty_from_col' = available_qty. ordered_qty must remain null."
+        )
+    if result.metadata_hints.get("detected_currency"):
+        extra.append(f"Detected currency: {result.metadata_hints['detected_currency']}")
+    return extra
+
+
+def _is_present(value) -> bool:
+    return value is not None and not (isinstance(value, float) and pd.isna(value))
+
+
+def _has_values(series: pd.Series) -> bool:
+    values = series.dropna().astype(str).str.strip()
+    values = values[~values.str.lower().isin(["", "nan", "none"])]
+    return not values.empty
+
+
+def _enforce_import_truth(df_extracted: pd.DataFrame, import_df: pd.DataFrame) -> pd.DataFrame:
+    """Keep structural fields from local import; customers fill ordered_qty later."""
+    df = df_extracted.copy().reset_index(drop=True)
+    source = import_df.reset_index(drop=True)
+
+    df["ordered_qty"] = None
+    if len(source) != len(df):
+        return df
+
+    structural_cols = [
+        "sku",
+        "ean",
+        "product_name",
+        "size",
+        "color",
+        "category",
+        "available_qty",
+        "unit_price",
+        "currency",
+        "discount_pct",
+    ]
+    for col in structural_cols:
+        if col in source.columns and _has_values(source[col]):
+            df[col] = source[col].values
+    return df
+
+
+def _build_local_extraction(result: Any) -> pd.DataFrame | None:
+    """Build extracted products from trusted local import columns when possible."""
+    source = result.df.copy().reset_index(drop=True)
+    if source.empty:
+        return None
+
+    has_identity = any(
+        col in source.columns and _has_values(source[col])
+        for col in ("product_name", "sku", "ean")
+    )
+    has_price = "unit_price" in source.columns and _has_values(source["unit_price"])
+    has_variant_info = any(
+        col in source.columns and _has_values(source[col])
+        for col in ("size", "color", "available_qty")
+    )
+    if not (has_identity and has_price and has_variant_info):
+        return None
+
+    df = pd.DataFrame(index=source.index)
+    for col in _LOCAL_EXTRACTION_COLUMNS:
+        if col == "extra_fields":
+            df[col] = [{} for _ in range(len(source))]
+        elif col in source.columns:
+            df[col] = source[col].values
+        else:
+            df[col] = None
+
+    df["ordered_qty"] = None
+    identity_cols = [col for col in ("product_name", "sku", "ean") if col in df.columns]
+    if identity_cols:
+        identity = df[identity_cols].fillna("").astype(str).agg("".join, axis=1).str.strip()
+        df = df[identity != ""]
+
+    return df.reset_index(drop=True) if not df.empty else None
+
 
 def render():
     settings = get_settings()
 
-    # ── STEP 1: Lieferant & Datei ─────────────────────────────────────────────
     st.subheader("1.  Lieferant & Datei")
 
     col_sup, col_prof = st.columns(2)
@@ -386,22 +310,22 @@ def render():
         if profiles:
             load_choice = st.selectbox(
                 "Profil laden (optional)",
-                ["– kein Profil –"] + profiles,
+                ["- kein Profil -"] + profiles,
                 key="profile_load_select",
             )
         else:
-            load_choice = "– kein Profil –"
+            load_choice = "- kein Profil -"
 
     loaded_profile = None
-    if load_choice != "– kein Profil –":
+    if load_choice != "- kein Profil -":
         loaded_profile = _repo.load(load_choice)
         if loaded_profile and not supplier_name:
             supplier_name = loaded_profile["name"]
             st.session_state["supplier_name"] = supplier_name
         if loaded_profile:
             st.caption(
-                f"Profil: {loaded_profile['name']} · "
-                f"Währung: {loaded_profile.get('typical_currency', '?')} · "
+                f"Profil: {loaded_profile['name']} | "
+                f"Währung: {loaded_profile.get('typical_currency', '?')} | "
                 f"Rabatt: {loaded_profile.get('typical_discount', 0)}%"
             )
 
@@ -415,48 +339,82 @@ def render():
         clear_extraction()
         return
 
-    fingerprint = f"{uploaded.name}::{uploaded.size}"
+    uploaded_bytes = uploaded.getvalue()
+    sheet_key = st.session_state.get("sheet_select", "")
+    fingerprint = f"{uploaded.name}::{uploaded.size}::{sheet_key}"
     if st.session_state["_file_fingerprint"] != fingerprint:
         clear_extraction()
         st.session_state["_file_fingerprint"] = fingerprint
 
-    result      = _read_uploaded_file(uploaded)
-    df_raw      = result.df
+    result = _read_uploaded_file(uploaded)
+    df_raw = result.df
 
-    file_info = f"{uploaded.name} · {len(df_raw)} Zeilen · {len(df_raw.columns)} Spalten"
+    file_info = f"{uploaded.name} | {len(df_raw)} Zeilen | {len(df_raw.columns)} Spalten"
     if result.was_unpivoted:
-        file_info += f" · {result.unpivot_info}"
+        file_info += f" | {result.unpivot_info}"
     if result.metadata_hints.get("detected_currency"):
-        file_info += f" · Währung erkannt: {result.metadata_hints['detected_currency']}"
-    st.caption(f"✅ {file_info}")
+        file_info += f" | Währung erkannt: {result.metadata_hints['detected_currency']}"
+    st.caption(f"{file_info}")
 
     st.divider()
-
-    # ── STEP 2: Produkte erkennen ─────────────────────────────────────────────
     st.subheader("2.  Produkte erkennen")
 
-    # Sanitize runs silently
     df_clean, sanitize_log = sanitize_dataframe(df_raw)
     st.session_state["sanitize_log"] = sanitize_log
-    removed = [e for e in sanitize_log if e.startswith("Spalte")]
+    removed = [entry for entry in sanitize_log if entry.startswith("Spalte")]
     if removed:
-        st.caption(f"🛡️ {len(removed)} sensible Spalte(n) vor Übermittlung entfernt.")
+        st.caption(f"{len(removed)} sensible Spalte(n) vor Übermittlung entfernt.")
 
     sanitized_text = df_clean.to_string(index=False)
 
     from offerten_converter.application.extract_products import _split_table_into_chunks
+
     n_chunks = len(_split_table_into_chunks(sanitized_text))
 
     col_btn, col_cost = st.columns([2, 3])
     with col_btn:
-        extract_btn = st.button(
-            "🔍  Produkte erkennen", type="primary", use_container_width=True,
-        )
+        extract_btn = st.button("Produkte erkennen", type="primary", use_container_width=True)
     with col_cost:
         st.write("")
         _api_cost_caption(sanitized_text, n_chunks)
 
+    if st.session_state["extracted_df"] is None:
+        cached_df = _load_cached_extraction(uploaded_bytes, result)
+        if cached_df is not None:
+            st.session_state["extracted_df"] = cached_df
+            st.session_state["api_usage"] = {"input_tokens": 0, "output_tokens": 0}
+            st.success(f"{len(cached_df)} Produkte aus lokalem Cache geladen.")
+        else:
+            local_df = _build_local_extraction(result)
+            if local_df is not None:
+                local_df = _enforce_import_truth(local_df, result.df)
+                _save_cached_extraction(uploaded_bytes, result, local_df)
+                st.session_state["extracted_df"] = local_df
+                st.session_state["api_usage"] = {"input_tokens": 0, "output_tokens": 0}
+                st.success(f"{len(local_df)} Produkte aus Datei-Struktur ohne API aufgebaut.")
+
+    if st.session_state["extracted_df"] is not None:
+        st.caption("Eine Extraktion ist bereits vorhanden. Kein neuer API-Call nötig.")
+        force_api = st.checkbox(
+            "API-Extraktion erneut ausführen (kostet Tokens)",
+            key="force_api_extract",
+        )
+    else:
+        force_api = st.checkbox(
+            "API-Extraktion ausführen (kostet Tokens)",
+            key="force_api_extract",
+        )
+
     if extract_btn:
+        if not force_api:
+            if st.session_state["extracted_df"] is not None:
+                st.info(
+                    "API-Extraktion nicht ausgeführt. "
+                    "Die vorhandene lokale Extraktion bleibt aktiv."
+                )
+            else:
+                st.info("API-Extraktion nicht ausgeführt. Bitte zuerst bewusst bestätigen.")
+            return
         for key in ("extracted_df", "raw_api_response", "extraction_error", "api_usage"):
             st.session_state[key] = None
 
@@ -465,35 +423,33 @@ def render():
             st.error("ANTHROPIC_API_KEY nicht gesetzt. Bitte in der .env-Datei eintragen.")
             return
 
-        hints = profile_to_hints(loaded_profile) if loaded_profile else ""
-        extra = []
-        if result.was_unpivoted:
-            extra.append(
-                "Data was unpivoted: '_size_from_col' = size, "
-                "'_qty_from_col' = ordered_qty."
-            )
-        if result.metadata_hints.get("detected_currency"):
-            extra.append(f"Detected currency: {result.metadata_hints['detected_currency']}")
-        if extra:
-            hints = (hints + " | " if hints else "") + " | ".join(extra)
+        hint_parts = []
+        if loaded_profile:
+            hint_parts.append(profile_to_hints(loaded_profile))
+        hint_parts.extend(_metadata_hints(result))
+        blocked_terms = [supplier_name]
+        if loaded_profile:
+            blocked_terms.append(loaded_profile.get("name", ""))
+        hints = _sanitize_prompt_hints(
+            " | ".join(part for part in hint_parts if part),
+            blocked_terms=blocked_terms,
+        )
 
-        with st.spinner("Produkte werden erkannt …"):
+        with st.spinner("Produkte werden erkannt ..."):
             try:
-                items, usage = extract_line_items(sanitized_text, hints, api_key)
+                items, usage = extract_line_items(
+                    sanitized_text,
+                    hints,
+                    api_key,
+                    call_fn=get_call_fn(api_key),
+                )
                 df_extracted = pd.DataFrame(items)
-
-                if "ordered_qty" in df_extracted.columns:
-                    qty_col = pd.to_numeric(df_extracted["ordered_qty"], errors="coerce")
-                    if (qty_col > 0).any() and (qty_col == 0).any():
-                        n_before = len(df_extracted)
-                        df_extracted = df_extracted[qty_col > 0].reset_index(drop=True)
-                        st.info(
-                            f"{n_before - len(df_extracted)} Positionen mit Menge 0 entfernt."
-                        )
+                df_extracted = _enforce_import_truth(df_extracted, result.df)
+                _save_cached_extraction(uploaded_bytes, result, df_extracted)
 
                 st.session_state["extracted_df"] = df_extracted
-                st.session_state["api_usage"]    = usage
-                st.success(f"✅ {len(df_extracted)} Produkte erkannt.")
+                st.session_state["api_usage"] = usage
+                st.success(f"{len(df_extracted)} Produkte erkannt.")
             except ValueError as exc:
                 st.session_state["extraction_error"] = str(exc)
             except RuntimeError as exc:
@@ -501,31 +457,34 @@ def render():
                 return
 
     if st.session_state.get("extraction_error"):
-        st.error("Extraktion fehlgeschlagen – bitte erneut versuchen.")
+        st.error("Extraktion fehlgeschlagen - bitte erneut versuchen.")
         return
 
     if st.session_state["extracted_df"] is None:
         return
 
-    # Market prices auto-load (after extraction, once per session)
+    st.session_state["extracted_df"] = _enforce_import_truth(
+        st.session_state["extracted_df"],
+        result.df,
+    )
+
     _fetch_market_prices_once(st.session_state["extracted_df"])
 
     st.divider()
-
-    # ── STEP 3: Produkte & Preise ─────────────────────────────────────────────
     st.subheader("3.  Produkte & Preise")
 
-    extracted_df  = st.session_state["extracted_df"]
-    rates         = settings["rates"]
+    extracted_df = st.session_state["extracted_df"]
+    rates = settings["rates"]
     market_prices = st.session_state.get("market_prices", {})
 
-    # Controls: global margin + currency + marktpreis quick-fill
     ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([1.2, 1, 1.5, 1.5])
     margin_pct = ctrl1.number_input(
         "Standard-Marge %",
-        min_value=0.0, max_value=99.0,
+        min_value=0.0,
+        max_value=99.0,
         value=settings["default_margin"],
-        step=0.5, format="%.1f",
+        step=0.5,
+        format="%.1f",
         key="margin_input",
     )
     target_currency = ctrl2.selectbox(
@@ -535,90 +494,88 @@ def render():
         key="currency_input",
     )
     apply_mp = False
-    mp_pct   = 0.0
+    mp_pct = 0.0
     if market_prices:
         mp_pct = ctrl3.number_input(
-            "Marktpreis – %",
-            min_value=0.0, max_value=99.0,
-            value=5.0, step=0.5, format="%.1f",
+            "Marktpreis - %",
+            min_value=0.0,
+            max_value=99.0,
+            value=5.0,
+            step=0.5,
+            format="%.1f",
             key="mp_pct",
             help="VK aller Produkte auf Marktpreis minus X% setzen",
         )
         ctrl4.write("")
         ctrl4.write("")
-        apply_mp = ctrl4.button(
-            "Auf alle anwenden", key="apply_mp", use_container_width=True,
-        )
+        apply_mp = ctrl4.button("Auf alle anwenden", key="apply_mp", use_container_width=True)
 
-    # Build enriched base (for EK in target currency)
     enriched_base = enrich_dataframe(extracted_df, margin_pct, target_currency, rates)
 
-    # Build unified pricing table
     rows = []
     for _, row in enriched_base.iterrows():
         ean = str(row.get("ean", "") or "").strip()
-        mp  = market_prices.get(ean) if ean else None
+        mp = market_prices.get(ean) if ean else None
         rows.append({
-            "Bezeichnung":       row.get("product_name", ""),
-            "Grösse":            row.get("size", ""),
-            "Farbe":             row.get("color", ""),
-            "Menge":             row.get("qty"),
-            "EK/Stk":            row.get("ek_unit_target"),
-            "Marktpreis 🌐":     mp,
-            "Marge %":           margin_pct,
-            "VK/Stk (manuell)":  None,
-            "Notizen":           str(row.get("notes") or ""),
+            "Bezeichnung": row.get("product_name", ""),
+            "Grösse": row.get("size", ""),
+            "Farbe": row.get("color", ""),
+            "Menge": row.get("qty"),
+            "EK/Stk": row.get("ek_unit_target"),
+            "Marktpreis": mp,
+            "Marge %": margin_pct,
+            "VK/Stk (manuell)": None,
+            "Notizen": str(row.get("notes") or ""),
         })
     unified_df = pd.DataFrame(rows)
 
-    # Restore previous edits
     prev = st.session_state.get("_pricing_edits")
     if prev is not None and len(prev) == len(unified_df):
         for col in ("Menge", "Marge %", "VK/Stk (manuell)", "Notizen"):
             if col in prev.columns:
                 unified_df[col] = prev[col].values
 
-    # Apply marktpreis quick-fill
     if apply_mp:
         for i in range(len(unified_df)):
-            mp_val = unified_df.at[i, "Marktpreis 🌐"]
-            if mp_val is not None and not (isinstance(mp_val, float) and pd.isna(mp_val)):
-                unified_df.at[i, "VK/Stk (manuell)"] = round(
-                    float(mp_val) * (1 - mp_pct / 100), 2
-                )
+            mp_val = unified_df.at[i, "Marktpreis"]
+            if _is_present(mp_val):
+                unified_df.at[i, "VK/Stk (manuell)"] = round(float(mp_val) * (1 - mp_pct / 100), 2)
 
-    has_market = market_prices and any(r["Marktpreis 🌐"] is not None for r in rows)
+    has_market = market_prices and any(row["Marktpreis"] is not None for row in rows)
 
     col_cfg: dict = {
-        "Bezeichnung":      st.column_config.TextColumn(disabled=True, width="large"),
-        "Grösse":           st.column_config.TextColumn(disabled=True, width="small"),
-        "Farbe":            st.column_config.TextColumn(disabled=True, width="small"),
-        "Menge":            st.column_config.NumberColumn(format="%d", width="small"),
-        "EK/Stk":           st.column_config.NumberColumn(
-                                disabled=True, format="%.2f",
-                                label=f"EK/Stk ({target_currency})",
-                            ),
-        "Marktpreis 🌐":    st.column_config.NumberColumn(
-                                disabled=True, format="%.2f",
-                                help="Günstigster Preis toppreise.ch – nicht im Export",
-                            ) if has_market else None,
-        "Marge %":          st.column_config.NumberColumn(
-                                min_value=0.0, max_value=99.0, format="%.1f",
-                                help="Pro Zeile editierbar",
-                            ),
+        "Bezeichnung": st.column_config.TextColumn(disabled=True, width="large"),
+        "Grösse": st.column_config.TextColumn(disabled=True, width="small"),
+        "Farbe": st.column_config.TextColumn(disabled=True, width="small"),
+        "Menge": st.column_config.NumberColumn(format="%d", width="small"),
+        "EK/Stk": st.column_config.NumberColumn(
+            disabled=True,
+            format="%.2f",
+            label=f"EK/Stk ({target_currency})",
+        ),
+        "Marktpreis": st.column_config.NumberColumn(
+            disabled=True,
+            format="%.2f",
+            help="Günstigster Preis toppreise.ch - nicht im Export",
+        ) if has_market else None,
+        "Marge %": st.column_config.NumberColumn(
+            min_value=0.0,
+            max_value=99.0,
+            format="%.1f",
+            help="Pro Zeile editierbar",
+        ),
         "VK/Stk (manuell)": st.column_config.NumberColumn(
-                                format="%.2f",
-                                label=f"VK/Stk ({target_currency})",
-                                help="Direkt eingeben – überschreibt Marge %. Leer = automatisch.",
-                            ),
-        "Notizen":          st.column_config.TextColumn(width="medium"),
+            format="%.2f",
+            label=f"VK/Stk ({target_currency})",
+            help="Direkt eingeben - überschreibt Marge %. Leer = automatisch.",
+        ),
+        "Notizen": st.column_config.TextColumn(width="medium"),
     }
-    # Remove None entries (hidden columns)
-    col_cfg = {k: v for k, v in col_cfg.items() if v is not None}
+    col_cfg = {key: value for key, value in col_cfg.items() if value is not None}
 
-    display_cols = [c for c in unified_df.columns if c in col_cfg or c == "Marktpreis 🌐"]
-    if not has_market and "Marktpreis 🌐" in unified_df.columns:
-        display_cols = [c for c in display_cols if c != "Marktpreis 🌐"]
+    display_cols = [col for col in unified_df.columns if col in col_cfg or col == "Marktpreis"]
+    if not has_market and "Marktpreis" in unified_df.columns:
+        display_cols = [col for col in display_cols if col != "Marktpreis"]
 
     edited = st.data_editor(
         unified_df[display_cols],
@@ -629,11 +586,10 @@ def render():
     )
     st.session_state["_pricing_edits"] = edited.copy()
 
-    # Re-enrich with per-row overrides
     df_for_export = extracted_df.copy()
     for i, erow in edited.iterrows():
         qty_val = erow.get("Menge")
-        if qty_val is not None and not (isinstance(qty_val, float) and pd.isna(qty_val)):
+        if _is_present(qty_val):
             df_for_export.at[i, "ordered_qty"] = qty_val
         note_val = erow.get("Notizen", "")
         if note_val:
@@ -641,10 +597,10 @@ def render():
 
     enriched_rows = []
     for i, row in df_for_export.iterrows():
-        erow       = edited.iloc[i]
-        vk_manual  = erow.get("VK/Stk (manuell)")
-        marge_row  = float(erow.get("Marge %") or margin_pct)
-        row_df     = pd.DataFrame([row])
+        erow = edited.iloc[i]
+        vk_manual = erow.get("VK/Stk (manuell)")
+        marge_row = float(erow.get("Marge %") or margin_pct)
+        row_df = pd.DataFrame([row])
 
         try:
             vk_f = float(vk_manual) if vk_manual is not None else None
@@ -661,39 +617,24 @@ def render():
     enriched = pd.concat(enriched_rows, ignore_index=True)
     st.session_state["enriched_df"] = enriched
 
-    # Warn if any rows had their quantity defaulted to 1
-    if "_qty_fallback" in enriched.columns:
-        fallback_rows = enriched[enriched["_qty_fallback"] == True]
-        if not fallback_rows.empty:
-            names = fallback_rows.get("product_name", fallback_rows.index).tolist()
-            st.warning(
-                f"⚠️ **Menge nicht erkannt** bei {len(fallback_rows)} Position(en) – "
-                f"Menge wurde auf **1** gesetzt. Bitte manuell prüfen: "
-                + ", ".join(str(n) for n in names[:5])
-                + ("…" if len(names) > 5 else "")
-            )
-
-    # Warn if any currencies are unknown (fallback to 1:1 rate)
     if "_unknown_currency" in enriched.columns:
-        unknown = enriched[enriched["_unknown_currency"] == True]
+        unknown = enriched[enriched["_unknown_currency"].fillna(False).astype(bool)]
         if not unknown.empty:
             bad_currencies = unknown["currency"].dropna().unique().tolist()
             st.error(
-                f"🚨 **Unbekannte Währung(en): {', '.join(bad_currencies)}** – "
+                f"Unbekannte Währung(en): {', '.join(bad_currencies)} - "
                 f"Kein Wechselkurs verfügbar, Umrechnung 1:1 verwendet. "
                 f"Bitte Wechselkurs in den Einstellungen nachtragen."
             )
 
-    # Summary metrics
     ek_total = enriched["ek_target"].sum(skipna=True)
     vk_total = enriched["vk_target"].sum(skipna=True)
     avg_marg = enriched["margin_actual"].mean(skipna=True)
     m1, m2, m3 = st.columns(3)
     m1.metric(f"EK Total ({target_currency})", f"{ek_total:,.2f}")
     m2.metric(f"VK Total ({target_currency})", f"{vk_total:,.2f}")
-    m3.metric("Ø Marge", f"{avg_marg:.1f}%" if not pd.isna(avg_marg) else "–")
+    m3.metric("Ø Marge", f"{avg_marg:.1f}%" if not pd.isna(avg_marg) else "-")
 
-    # Advanced options (collapsed)
     with st.expander("Erweiterte Optionen"):
         if supplier_name:
             st.markdown("**Lieferantenprofil speichern**")
@@ -707,13 +648,9 @@ def render():
                 st.success(f"Profil '{supplier_name}' gespeichert.")
 
     st.divider()
-
-    # ── STEP 4: Offerte exportieren ───────────────────────────────────────────
     st.subheader("4.  Offerte exportieren")
 
-    effective_supplier = supplier_name or (
-        loaded_profile.get("name", "") if loaded_profile else ""
-    )
+    effective_supplier = supplier_name or (loaded_profile.get("name", "") if loaded_profile else "")
     created_by = settings.get("company_name", "AMP Sport GmbH")
     valid_days = int(settings.get("valid_days", 30))
 
@@ -724,12 +661,17 @@ def render():
     else:
         try:
             excel_bytes = export_to_excel(
-                enriched, effective_supplier, created_by, target_currency, valid_days,
+                enriched,
+                effective_supplier,
+                created_by,
+                target_currency,
+                valid_days,
+                build_fn=build_excel,
             )
             today_str = date.today().strftime("%Y%m%d")
-            filename  = f"Offerte_{effective_supplier.replace(' ', '_')}_{today_str}.xlsx"
+            filename = f"Offerte_{effective_supplier.replace(' ', '_')}_{today_str}.xlsx"
             st.download_button(
-                label=f"⬇️  Offerte herunterladen  ({len(enriched)} Positionen)",
+                label=f"Offerte herunterladen ({len(enriched)} Positionen)",
                 data=excel_bytes,
                 file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

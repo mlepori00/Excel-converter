@@ -15,11 +15,11 @@ _SRC_DIR = str(Path(__file__).resolve().parent.parent)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-import streamlit as st
-from dotenv import load_dotenv
+import streamlit as st  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
 
-from offerten_converter.ui import tab_einstellungen, tab_konvertieren, tab_lieferanten
-from offerten_converter.ui.state import init_state
+from offerten_converter.ui import tab_einstellungen, tab_konvertieren, tab_lieferanten  # noqa: E402
+from offerten_converter.ui.state import init_state  # noqa: E402
 
 # Bootstrap – search for .env starting from the project root (two levels up from this file)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
