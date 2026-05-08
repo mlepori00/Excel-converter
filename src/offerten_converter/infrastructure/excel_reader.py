@@ -28,15 +28,20 @@ _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
         "model-color", "description", "product/color", "bezeichnung",
     ),
     "size": (
-        "size", "item size (eu)", "item size (us)", "size / size run",
-        "größe", "grösse",
-        "größe", "groesse",
+        "size", "item size (eu)", "item size (us)", "item size (uk)",
+        "size / size run", "size run", "shoe size", "schuhgrösse", "schuhgroesse",
+        "größe", "grösse", "groesse",
+        "eu size", "us size", "uk size",
     ),
     "color": (
         "color", "colour", "color name", "color description", "color/code color",
         "farbe",
     ),
-    "category": ("category", "subcategory", "sub-family", "family", "concept", "use for"),
+    "category": (
+        "category", "subcategory", "sub-family", "family", "concept", "use for",
+        "collection", "kollektion", "kollection", "season", "saison",
+        "line", "product line", "genre", "segment", "series",
+    ),
     "available_qty": (
         "available qty", "available quantity", "available q.ty", "stock",
         "qty", "max qty", "quantity available", "bestand", "lager",
@@ -411,12 +416,21 @@ def _looks_like_size_label(value: object) -> bool:
         return False
     if text in _TEXT_SIZES:
         return True
+    # Pure number in shoe/clothing range: 36, 38.5, 10, 10.5
     if re.fullmatch(r"\d+(?:[.,]\d+)?", text):
         try:
             number = float(text.replace(",", "."))
         except ValueError:
             return False
         return 1 <= number <= 55
+    # Number + size system suffix: "38 EU", "9.5 US", "8 UK", "42 DE", "42 FR"
+    m = re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*(?:EU|US|UK|FR|DE|IT|BR|JP|CN|CM)", text)
+    if m:
+        try:
+            return 1 <= float(m.group(1).replace(",", ".")) <= 55
+        except ValueError:
+            pass
+    # Youth / child: 5Y, 8C
     return bool(re.fullmatch(r"\d+(?:[.,]\d+)?[CY]", text))
 
 

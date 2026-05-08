@@ -5,13 +5,15 @@ type IconName =
   | "box"
   | "check"
   | "chevronRight"
+  | "download"
   | "file"
   | "search"
   | "shield"
   | "upload"
   | "user"
   | "wallet"
-  | "warning";
+  | "warning"
+  | "loader";
 
 type IconProps = {
   name: IconName;
@@ -35,6 +37,13 @@ const paths: Record<IconName, ReactNode> = {
   ),
   check: <path d="m5 12 4 4L19 6" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
+  download: (
+    <>
+      <path d="M12 3v13" />
+      <path d="m8 12 4 4 4-4" />
+      <path d="M5 19h14" />
+    </>
+  ),
   file: (
     <>
       <path d="M6 3h8l4 4v14H6z" />
@@ -73,6 +82,18 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="12" cy="12" r="10" />
       <path d="M12 7v6" />
       <path d="M12 17h.01" />
+    </>
+  ),
+  loader: (
+    <>
+      <path d="M12 2v4" />
+      <path d="M12 18v4" />
+      <path d="m4.93 4.93 2.83 2.83" />
+      <path d="m16.24 16.24 2.83 2.83" />
+      <path d="M2 12h4" />
+      <path d="M18 12h4" />
+      <path d="m4.93 19.07 2.83-2.83" />
+      <path d="m16.24 7.76 2.83-2.83" />
     </>
   )
 };
