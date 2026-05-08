@@ -29,6 +29,7 @@ _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "size": (
         "size", "item size (eu)", "item size (us)", "size / size run",
+        "größe", "grösse",
         "größe", "groesse",
     ),
     "color": (
@@ -37,13 +38,17 @@ _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "category": ("category", "subcategory", "sub-family", "family", "concept", "use for"),
     "available_qty": (
-        "available qty", "available quantity", "available q.ty", "stock", "total",
+        "available qty", "available quantity", "available q.ty", "stock",
         "qty", "max qty", "quantity available", "bestand", "lager",
+        "max. verfügbar", "max verfügbar", "max. verfuegbar", "max verfuegbar",
+        "verfügbar", "verfuegbar",
     ),
     "ordered_qty": ("order", "ordered qty", "ordered quantity", "order qty", "bestellung"),
     "unit_price": (
         "offer price", "offer price eur€", "offer price eur", "whs", "whs (eur)",
         "wholesale", "exw bcn", "deal", "net price", "unit price",
+        "ek/stk", "ek stk", "ek pro stk", "ek/stück", "ek stück",
+        "einkaufspreis", "nettopreis",
     ),
     "currency": ("currency", "währung", "waehrung"),
     "discount_pct": ("retail discount %", "discount", "rabatt"),
@@ -211,11 +216,15 @@ def read_offer_file(
             metadata_hints["layout_type"] = "flat_variant_rows"
 
         df, mapping = _add_canonical_columns(df)
+        df = _drop_non_product_rows(df)
         if mapping:
             metadata_hints["column_mapping"] = mapping
 
+        explicit_currency = _dominant_currency(df["currency"]) if "currency" in df.columns else None
         format_currency = _detect_currency_from_formats(file_bytes, chosen)
-        if format_currency and not metadata_hints.get("detected_currency"):
+        if explicit_currency:
+            metadata_hints["detected_currency"] = explicit_currency
+        elif format_currency and not metadata_hints.get("detected_currency"):
             metadata_hints["detected_currency"] = format_currency
         if metadata_hints.get("detected_currency") and "currency" not in df.columns:
             df["currency"] = metadata_hints["detected_currency"]
@@ -255,6 +264,58 @@ def _normalize_label(value: object) -> str:
     text = str(value or "").strip().lower()
     text = re.sub(r"\s+", " ", text)
     return text
+
+
+def _has_non_empty_values(series: pd.Series) -> bool:
+    values = series.dropna().astype(str).str.strip()
+    values = values[~values.str.lower().isin(["", "nan", "none"])]
+    return not values.empty
+
+
+def _parse_price_from_text(value: object) -> str | None:
+    text = str(value or "")
+    if not text.strip():
+        return None
+    match = re.search(
+        r"(?:rrp|retail price|uvp)\s*[:=]?\s*(?:CHF|EUR|USD|€|\$)?\s*"
+        r"(\d{1,6}(?:[.,]\d{1,2})?)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).replace(",", ".")
+
+
+def _drop_non_product_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop obvious totals/footers after canonical product columns are available."""
+    if df.empty:
+        return df
+
+    keep = pd.Series(True, index=df.index)
+    for col in df.columns:
+        if _normalize_label(col) in ("pos", "position"):
+            pos_text = df[col].fillna("").astype(str).map(_normalize_label)
+            keep &= ~pos_text.isin({"total", "subtotal", "summe", "gesamt"})
+
+    identity_cols = [col for col in ("product_name", "sku", "ean") if col in df.columns]
+    if identity_cols:
+        identity = df[identity_cols].fillna("").astype(str).agg(" ".join, axis=1).map(
+            _normalize_label
+        )
+        keep &= identity.str.strip() != ""
+        footer_terms = ("www.", "poststrasse", "amp sport gmbh", "offerten converter")
+        keep &= ~identity.apply(lambda text: any(term in text for term in footer_terms))
+
+    return df[keep].reset_index(drop=True)
+
+
+def _dominant_currency(series: pd.Series) -> str | None:
+    values = series.dropna().astype(str).str.strip().str.upper()
+    values = values[values.str.fullmatch(r"[A-Z]{3}")]
+    if values.empty:
+        return None
+    return str(values.mode().iloc[0])
 
 
 def _matches_alias(label: object, aliases: tuple[str, ...]) -> bool:
@@ -317,6 +378,22 @@ def _add_canonical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, st
         if fallback is not None:
             df["unit_price"] = df[fallback]
             mapping["unit_price"] = str(fallback)
+    extra_source = _find_column(df, ("zusatzinfos", "extra fields", "extra_fields", "notes"))
+    if extra_source is not None:
+        parsed_prices = df[extra_source].map(_parse_price_from_text)
+        if _has_non_empty_values(parsed_prices):
+            if "unit_price" in df.columns:
+                unit_price = df["unit_price"].copy()
+                blank_values = ["", "nan", "None"]
+                blank = unit_price.isna() | unit_price.astype(str).str.strip().isin(blank_values)
+                unit_price.loc[blank] = parsed_prices.loc[blank]
+                df["unit_price"] = unit_price
+                if blank.any():
+                    existing = mapping.get("unit_price", "unit_price")
+                    mapping["unit_price"] = f"{existing} + {extra_source} (rrp)"
+            else:
+                df["unit_price"] = parsed_prices
+                mapping["unit_price"] = f"{extra_source} (rrp)"
 
     return df, mapping
 

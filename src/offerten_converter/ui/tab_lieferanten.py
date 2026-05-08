@@ -5,19 +5,25 @@ from __future__ import annotations
 import streamlit as st
 
 from offerten_converter.infrastructure.file_profile_repo import FileProfileRepository
+from offerten_converter.ui.theme import render_section, render_status_card
 
 _repo = FileProfileRepository()
 
 
 def render():
     """Render the Lieferanten tab."""
-    st.header("Lieferantenprofile verwalten")
+    render_section(
+        "Lieferanten",
+        "Profile verwalten",
+        "Wiederkehrende Lieferanten strukturieren, typische Währungen und Spaltenhinweise pflegen.",
+    )
 
     profiles = _repo.list_profiles()
     if not profiles:
-        st.info(
+        render_status_card(
+            "Noch keine Profile vorhanden",
             "Noch keine Profile vorhanden. "
-            "Erstelle ein Profil nach der ersten erfolgreichen Extraktion (Tab 'Konvertieren')."
+            "Erstelle ein Profil nach der ersten erfolgreichen Extraktion im Tab Konvertieren.",
         )
         return
 
@@ -31,11 +37,21 @@ def render():
     col_view, col_edit = st.columns(2)
 
     with col_view:
-        st.subheader("Profil-Details")
-        st.json(profile)
+        render_section("Details", "Profil-Details")
+        st.metric("Lieferant", profile.get("name", selected))
+        c1, c2 = st.columns(2)
+        c1.metric("Typische Währung", profile.get("typical_currency", "-"))
+        c2.metric("Typischer Rabatt", f"{float(profile.get('typical_discount', 0.0)):.1f}%")
+        hints = profile.get("column_hints", "").strip()
+        render_status_card(
+            "Spalten-Hinweise",
+            hints if hints else "Keine Hinweise hinterlegt.",
+        )
+        with st.expander("Rohdaten anzeigen"):
+            st.json(profile)
 
     with col_edit:
-        st.subheader("Profil bearbeiten")
+        render_section("Bearbeiten", "Profil bearbeiten")
         new_currency = st.text_input(
             "Typische Währung", value=profile.get("typical_currency", "EUR"),
         )
@@ -57,7 +73,7 @@ def render():
                 st.rerun()
 
     st.divider()
-    st.subheader("Neues Profil anlegen")
+    render_section("Neu", "Neues Profil anlegen")
     with st.form("new_profile_form"):
         np_name = st.text_input("Lieferantenname")
         np_currency = st.text_input("Typische Währung", value="EUR")

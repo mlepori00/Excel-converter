@@ -20,6 +20,11 @@ from dotenv import load_dotenv  # noqa: E402
 
 from offerten_converter.ui import tab_einstellungen, tab_konvertieren, tab_lieferanten  # noqa: E402
 from offerten_converter.ui.state import init_state  # noqa: E402
+from offerten_converter.ui.theme import (  # noqa: E402
+    apply_amp_theme,
+    render_app_header,
+    render_footer,
+)
 
 # Bootstrap – search for .env starting from the project root (two levels up from this file)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -27,8 +32,8 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
 st.set_page_config(
-    page_title="Offerten Converter",
-    page_icon="📊",
+    page_title="AMP Sport Offerten Converter",
+    page_icon="AMP",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -37,9 +42,8 @@ init_state()
 
 
 def main():
-    st.title("Offerten Converter")
-    st.caption("Lieferanten-Offerte → KI-Extraktion → Preiskalkulation → Reseller-Export")
-
+    apply_amp_theme()
+    render_app_header()
     tab1, tab2, tab3 = st.tabs(["Konvertieren", "Lieferanten", "Einstellungen"])
 
     with tab1:
@@ -48,6 +52,7 @@ def main():
         tab_lieferanten.render()
     with tab3:
         tab_einstellungen.render()
+    render_footer()
 
 
 if __name__ == "__main__":

@@ -5,14 +5,19 @@ from __future__ import annotations
 import streamlit as st
 
 from offerten_converter.ui.state import get_settings
+from offerten_converter.ui.theme import render_section, render_status_card
 
 
 def render():
     """Render the Einstellungen tab."""
-    st.header("Einstellungen")
+    render_section(
+        "Einstellungen",
+        "App-Konfiguration",
+        "Firmenangaben, Margen, Währungen und Datenschutzinformationen zentral pflegen.",
+    )
     settings = get_settings()
 
-    st.subheader("Allgemein")
+    render_section("Allgemein", "Grundwerte")
     col_a, col_b = st.columns(2)
     with col_a:
         settings["company_name"] = st.text_input(
@@ -34,16 +39,19 @@ def render():
         )
 
     st.divider()
-    st.subheader("Wechselkurse (1 CHF = X Fremdwährung)")
+    render_section("Wechselkurse", "1 CHF = X Fremdwährung")
 
     # Show rate source + refresh button
     rates_source = st.session_state.get("_rates_source", "statisch")
     col_src, col_btn = st.columns([3, 1])
     with col_src:
         if rates_source.startswith("EZB"):
-            st.success(f"Kurse geladen von: **{rates_source}**")
+            render_status_card("Kurse geladen", f"Quelle: {rates_source}")
         else:
-            st.warning(f"Kurse: **{rates_source}** – Standardwerte werden verwendet.")
+            render_status_card(
+                "Kurse nicht live",
+                f"Quelle: {rates_source}. Standardwerte werden verwendet.",
+            )
     with col_btn:
         if st.button("Kurse aktualisieren"):
             st.session_state["_rates_loaded"] = False
@@ -64,7 +72,7 @@ def render():
         settings["rates"][currency] = new_rate
 
     st.divider()
-    st.subheader("Neue Währung hinzufügen")
+    render_section("Währungen", "Neue Währung hinzufügen")
     col_nc1, col_nc2, col_nc3 = st.columns([1, 1, 1])
     with col_nc1:
         new_code = st.text_input("ISO-Code (3 Buchstaben)", max_chars=3).upper()
@@ -84,7 +92,7 @@ def render():
                 st.error("Bitte gültigen 3-Buchstaben ISO-Code eingeben.")
 
     st.divider()
-    st.subheader("Datenschutz-Info")
+    render_section("Datenschutz", "Was lokal bleibt")
     st.info(
         "**Was lokal bleibt:** Hochgeladene Dateien, Lieferantenname, Kundendaten, "
         "Kontaktinformationen, IBAN, UID-Nummern, Lieferantenprofile.\n\n"

@@ -26,6 +26,17 @@ from offerten_converter.infrastructure.excel_reader import (
 from offerten_converter.infrastructure.excel_writer import build_excel
 from offerten_converter.infrastructure.file_profile_repo import FileProfileRepository
 from offerten_converter.ui.state import clear_extraction, get_settings
+from offerten_converter.ui.theme import (
+    render_field_help,
+    render_guidance_panel,
+    render_next_steps,
+    render_panel_heading,
+    render_process_sidebar,
+    render_section,
+    render_status_card,
+    render_system_card,
+    render_workflow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -294,46 +305,110 @@ def _build_local_extraction(result: Any) -> pd.DataFrame | None:
 def render():
     settings = get_settings()
 
-    st.subheader("1.  Lieferant & Datei")
-
-    col_sup, col_prof = st.columns(2)
-    with col_sup:
-        supplier_name = st.text_input(
-            "Lieferant",
-            value=st.session_state["supplier_name"],
-            placeholder="z.B. Sport Muster GmbH",
-        )
-        st.session_state["supplier_name"] = supplier_name
-
-    with col_prof:
-        profiles = _repo.list_profiles()
-        if profiles:
-            load_choice = st.selectbox(
-                "Profil laden (optional)",
-                ["- kein Profil -"] + profiles,
-                key="profile_load_select",
-            )
-        else:
-            load_choice = "- kein Profil -"
-
-    loaded_profile = None
-    if load_choice != "- kein Profil -":
-        loaded_profile = _repo.load(load_choice)
-        if loaded_profile and not supplier_name:
-            supplier_name = loaded_profile["name"]
-            st.session_state["supplier_name"] = supplier_name
-        if loaded_profile:
-            st.caption(
-                f"Profil: {loaded_profile['name']} | "
-                f"Währung: {loaded_profile.get('typical_currency', '?')} | "
-                f"Rabatt: {loaded_profile.get('typical_discount', 0)}%"
-            )
-
-    uploaded = st.file_uploader(
-        "Datei hochladen (.xlsx, .xls, .csv)",
-        type=["xlsx", "xls", "csv"],
-        key="file_uploader",
+    completed_steps: set[int] = set()
+    active_step = 1
+    has_uploaded_file = (
+        st.session_state.get("_file_fingerprint")
+        or st.session_state.get("file_uploader") is not None
     )
+    if has_uploaded_file:
+        completed_steps.add(1)
+        active_step = 2
+    if st.session_state.get("extracted_df") is not None:
+        completed_steps.add(2)
+        active_step = 3
+    if st.session_state.get("enriched_df") is not None:
+        completed_steps.add(3)
+        active_step = 4
+
+    render_process_sidebar(active_step)
+    render_workflow(active_step, completed_steps)
+
+    form_col, guide_col = st.columns([2.1, 1], gap="large")
+    with guide_col:
+        render_guidance_panel([
+            (
+                "Lieferant",
+                "Wird lokal für Profil, Export-Dateiname und Zuordnung benötigt.",
+                "Missing" if not st.session_state.get("supplier_name", "").strip() else "OK",
+                bool(st.session_state.get("supplier_name", "").strip()),
+            ),
+            (
+                "Excel-Datei",
+                "Die Offerte mit Artikeln, Varianten, Preisen und Verfügbarkeit.",
+                "Missing" if st.session_state.get("file_uploader") is None else "OK",
+                st.session_state.get("file_uploader") is not None,
+            ),
+            (
+                "Profil",
+                "Optional. Spart Arbeit bei wiederkehrenden Lieferanten.",
+                "Optional",
+                True,
+            ),
+        ])
+        render_next_steps(active_step)
+        render_system_card("Bereit für Import")
+
+    with form_col:
+        with st.container(border=True):
+            render_panel_heading("Offerte importieren", "upload")
+            render_section(
+                "Schritt 1",
+                "Lieferant & Datei",
+                "Lieferant wählen, Excel-Datei importieren und die erkannte Struktur prüfen.",
+            )
+
+            col_sup, col_prof = st.columns(2)
+            with col_sup:
+                supplier_name = st.text_input(
+                    "Lieferant *",
+                    value=st.session_state["supplier_name"],
+                    placeholder="Name des Lieferanten eingeben",
+                    help="Pflichtfeld. Wird lokal verwendet und nicht an die API gesendet.",
+                )
+                render_field_help("Pflicht: Name des Lieferanten. Wird nicht an die API gesendet.")
+                st.session_state["supplier_name"] = supplier_name
+
+            with col_prof:
+                profiles = _repo.list_profiles()
+                if profiles:
+                    load_choice = st.selectbox(
+                        "Profil laden",
+                        ["- kein Profil -"] + profiles,
+                        key="profile_load_select",
+                        help=(
+                            "Optional. Profile merken typische Währungen, Rabatte "
+                            "und Spaltenhinweise."
+                        ),
+                    )
+                else:
+                    load_choice = "- kein Profil -"
+                    st.selectbox("Profil laden", ["- kein Profil -"], disabled=True)
+                render_field_help("Optional: spart Arbeit bei wiederkehrenden Lieferanten.")
+
+            loaded_profile = None
+            if load_choice != "- kein Profil -":
+                loaded_profile = _repo.load(load_choice)
+                if loaded_profile and not supplier_name:
+                    supplier_name = loaded_profile["name"]
+                    st.session_state["supplier_name"] = supplier_name
+                if loaded_profile:
+                    st.caption(
+                        f"Profil: {loaded_profile['name']} | "
+                        f"Währung: {loaded_profile.get('typical_currency', '?')} | "
+                        f"Rabatt: {loaded_profile.get('typical_discount', 0)}%"
+                    )
+
+            uploaded = st.file_uploader(
+                "Excel-Datei *",
+                type=["xlsx", "xls", "csv"],
+                key="file_uploader",
+                help="Pflichtfeld. Unterstützt .xlsx, .xls und .csv.",
+            )
+            render_field_help(
+                "Pflicht: Lieferanten-Offerte hochladen. Die Datei wird nur im "
+                "Speicher verarbeitet."
+            )
 
     if uploaded is None:
         clear_extraction()
@@ -354,16 +429,35 @@ def render():
         file_info += f" | {result.unpivot_info}"
     if result.metadata_hints.get("detected_currency"):
         file_info += f" | Währung erkannt: {result.metadata_hints['detected_currency']}"
-    st.caption(f"{file_info}")
+    render_status_card("Datei erkannt", file_info)
 
     st.divider()
-    st.subheader("2.  Produkte erkennen")
+    render_panel_heading("Produkte erkennen", "scan")
+    render_section(
+        "Schritt 2",
+        "Produkte erkennen",
+        "Die Tabelle wird vor jedem API-Call bereinigt. Lieferantennamen und sensible Daten "
+        "bleiben aus dem Prompt.",
+    )
 
     df_clean, sanitize_log = sanitize_dataframe(df_raw)
     st.session_state["sanitize_log"] = sanitize_log
     removed = [entry for entry in sanitize_log if entry.startswith("Spalte")]
     if removed:
-        st.caption(f"{len(removed)} sensible Spalte(n) vor Übermittlung entfernt.")
+        render_status_card(
+            "Sanitizer aktiv",
+            f"{len(removed)} sensible Spalte(n) vor Übermittlung entfernt.",
+        )
+    else:
+        render_status_card(
+            "Sanitizer aktiv",
+            "Keine sensiblen Spalten erkannt. Die bereinigte Produkttabelle ist bereit.",
+        )
+    render_status_card(
+        "Nächste Entscheidung",
+        "Standardmässig nutzt die App Cache oder lokale Erkennung. Die API wird nur verwendet, "
+        "wenn Sie die Checkbox bewusst aktivieren.",
+    )
 
     sanitized_text = df_clean.to_string(index=False)
 
@@ -373,10 +467,20 @@ def render():
 
     col_btn, col_cost = st.columns([2, 3])
     with col_btn:
-        extract_btn = st.button("Produkte erkennen", type="primary", use_container_width=True)
+        extract_btn = st.button(
+            "Produkte erkennen",
+            type="primary",
+            use_container_width=True,
+            disabled=not supplier_name.strip(),
+        )
     with col_cost:
         st.write("")
         _api_cost_caption(sanitized_text, n_chunks)
+    if not supplier_name.strip():
+        st.warning(
+            "Bitte zuerst den Lieferantennamen ausfüllen. Danach ist die "
+            "Produkterkennung aktiv."
+        )
 
     if st.session_state["extracted_df"] is None:
         cached_df = _load_cached_extraction(uploaded_bytes, result)
@@ -471,7 +575,17 @@ def render():
     _fetch_market_prices_once(st.session_state["extracted_df"])
 
     st.divider()
-    st.subheader("3.  Produkte & Preise")
+    render_panel_heading("Produkte und Preise prüfen", "price")
+    render_section(
+        "Schritt 3",
+        "Produkte & Preise",
+        "Mengen, Margen und manuelle Verkaufspreise direkt in der Arbeitstabelle pflegen.",
+    )
+    render_status_card(
+        "Was muss hier geprüft werden?",
+        "Pflicht: Menge pro Position. Optional: Marge pro Zeile, manueller VK und Notizen. "
+        "Leere manuelle VK-Felder werden automatisch aus EK und Marge berechnet.",
+    )
 
     extracted_df = st.session_state["extracted_df"]
     rates = settings["rates"]
@@ -585,6 +699,19 @@ def render():
         key="unified_editor",
     )
     st.session_state["_pricing_edits"] = edited.copy()
+    missing_qty = 0
+    if "Menge" in edited.columns:
+        missing_qty = int(edited["Menge"].isna().sum())
+    if missing_qty:
+        st.warning(
+            f"{missing_qty} Position(en) haben noch keine Menge. "
+            "Bitte Mengen ergänzen oder prüfen, bevor die Offerte exportiert wird."
+        )
+    else:
+        st.success(
+            "Alle Positionen haben eine Menge. "
+            "Export kann nach der Preisprüfung erstellt werden."
+        )
 
     df_for_export = extracted_df.copy()
     for i, erow in edited.iterrows():
@@ -651,11 +778,36 @@ def render():
                 st.success(f"Profil '{supplier_name}' gespeichert.")
 
     st.divider()
-    st.subheader("4.  Offerte exportieren")
+    render_panel_heading("Export erstellen", "export")
+    render_section(
+        "Schritt 4",
+        "Offerte exportieren",
+        "Exportbereitschaft prüfen und die standardisierte Reseller-Offerte als Excel laden.",
+    )
 
     effective_supplier = supplier_name or (loaded_profile.get("name", "") if loaded_profile else "")
     created_by = settings.get("company_name", "AMP Sport GmbH")
     valid_days = int(settings.get("valid_days", 30))
+    render_guidance_panel([
+        (
+            "Lieferant",
+            "Muss gesetzt sein, damit die Offerte eindeutig benannt werden kann.",
+            "Pflicht",
+            bool(effective_supplier.strip()),
+        ),
+        (
+            "Positionen",
+            "Mindestens eine erkannte Produktposition muss vorhanden sein.",
+            "Pflicht",
+            not enriched.empty,
+        ),
+        (
+            "Mengen",
+            "Mengen sollten vor dem Export kontrolliert sein.",
+            "Pflicht",
+            missing_qty == 0,
+        ),
+    ])
 
     if not effective_supplier:
         st.warning("Bitte zuerst den Lieferantennamen eingeben (Schritt 1).")
