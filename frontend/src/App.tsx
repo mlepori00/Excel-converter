@@ -4,6 +4,7 @@ import { ExportFab } from "./components/ExportFab";
 import { ImportCard } from "./components/ImportCard";
 import { InfoCard } from "./components/InfoCard";
 import { MarketCard } from "./components/MarketCard";
+import { OverviewScreen } from "./components/OverviewScreen";
 import { ProductTable } from "./components/ProductTable";
 import { SettingsCard } from "./components/SettingsCard";
 import {
@@ -14,7 +15,7 @@ import {
   inferSupplierName,
   API,
 } from "./api";
-import type { ParseResult, ProductRow, RowEdit, Stage } from "./types";
+import type { ExportSummary, ParseResult, ProductRow, RowEdit, Stage } from "./types";
 
 export default function App() {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -39,6 +40,7 @@ export default function App() {
   const [marketDiscount, setMarketDiscount] = useState(20);
   const [scrapeEnabled, setScrapeEnabled] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [exportSummary, setExportSummary] = useState<ExportSummary | null>(null);
 
   const needsAiExtraction =
     parseResult !== null && parseResult.extraction_mode === "none" && products.length === 0;
@@ -246,8 +248,15 @@ export default function App() {
         marketPrices
       );
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      downloadBlob(blob, `Offerte_${supplierName.trim().replace(/\s+/g, "_")}_${today}.xlsx`);
-      setStage("ready");
+      const filename = `Offerte_${supplierName.trim().replace(/\s+/g, "_")}_${today}.xlsx`;
+      downloadBlob(blob, filename);
+      setExportSummary({
+        supplierName: supplierName.trim(),
+        articleCount: filteredProducts.length,
+        currency: targetCurrency,
+        filename,
+      });
+      setStage("exported");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Export-Fehler");
       setStage("ready");
@@ -278,7 +287,12 @@ export default function App() {
     setScrapingStatus("");
     setScrapingProgress(null);
     setScrapeEnabled(false);
+    setExportSummary(null);
     if (inputRef.current) inputRef.current.value = "";
+  }
+
+  function handleBackToDraft() {
+    setStage("ready");
   }
 
   function setEdit(rowId: number, field: keyof RowEdit, value: number | null) {
@@ -307,74 +321,84 @@ export default function App() {
         </div>
       </header>
 
-      <section className="top-grid">
-        <ImportCard
-          hasFile={hasFile}
-          inputRef={inputRef}
-          isLoading={isLoading}
-          onFile={(f) => void handleFile(f)}
-          onReset={handleReset}
-          parseResult={parseResult}
-          stage={stage}
+      {stage === "exported" && exportSummary ? (
+        <OverviewScreen
+          summary={exportSummary}
+          onNewOffer={handleReset}
+          onBack={handleBackToDraft}
         />
-        <InfoCard
-          error={error}
-          isLoading={isLoading}
-          needsAiExtraction={needsAiExtraction}
-          onExtract={() => void handleExtract()}
-          onReparse={() => void handleReparse()}
-          parseResult={parseResult}
-          products={products}
-        />
-        <MarketCard
-          hasFile={hasFile}
-          marketPrices={marketPrices}
-          onScrapeToggle={handleScrapeToggle}
-          products={products}
-          scrapeEnabled={scrapeEnabled}
-          scrapingProgress={scrapingProgress}
-          scrapingStatus={scrapingStatus}
-        />
-      </section>
+      ) : (
+        <>
+          <section className="top-grid">
+            <ImportCard
+                hasFile={hasFile}
+                inputRef={inputRef}
+                isLoading={isLoading}
+                onFile={(f) => void handleFile(f)}
+                onReset={handleReset}
+                parseResult={parseResult}
+                stage={stage}
+            />
+            <InfoCard
+              error={error}
+              isLoading={isLoading}
+              needsAiExtraction={needsAiExtraction}
+              onExtract={() => void handleExtract()}
+              onReparse={() => void handleReparse()}
+              parseResult={parseResult}
+              products={products}
+            />
+            <MarketCard
+              hasFile={hasFile}
+              marketPrices={marketPrices}
+              onScrapeToggle={handleScrapeToggle}
+              products={products}
+              scrapeEnabled={scrapeEnabled}
+              scrapingProgress={scrapingProgress}
+              scrapingStatus={scrapingStatus}
+            />
+          </section>
 
-      {hasFile && (
-        <section className="bottom-grid">
-          <ProductTable
-            edits={edits}
-            filteredProducts={filteredProducts}
-            margin={margin}
-            marketDiscount={marketDiscount}
-            marketPrices={marketPrices}
-            onEdit={setEdit}
-            onSearchChange={setSearchQuery}
-            pricingMode={pricingMode}
-            products={products}
-            searchQuery={searchQuery}
-          />
-          <SettingsCard
-            margin={margin}
-            marketDiscount={marketDiscount}
-            onCurrencyChange={setTargetCurrency}
-            onMarginChange={setMargin}
-            onMarketDiscountChange={setMarketDiscount}
-            onPricingModeChange={setPricingMode}
-            onSupplierNameChange={setSupplierName}
-            pricingMode={pricingMode}
-            supplierName={supplierName}
-            targetCurrency={targetCurrency}
-          />
-        </section>
-      )}
+          {hasFile && (
+            <section className="bottom-grid">
+              <ProductTable
+                edits={edits}
+                filteredProducts={filteredProducts}
+                margin={margin}
+                marketDiscount={marketDiscount}
+                marketPrices={marketPrices}
+                onEdit={setEdit}
+                onSearchChange={setSearchQuery}
+                pricingMode={pricingMode}
+                products={products}
+                searchQuery={searchQuery}
+              />
+              <SettingsCard
+                margin={margin}
+                marketDiscount={marketDiscount}
+                onCurrencyChange={setTargetCurrency}
+                onMarginChange={setMargin}
+                onMarketDiscountChange={setMarketDiscount}
+                onPricingModeChange={setPricingMode}
+                onSupplierNameChange={setSupplierName}
+                pricingMode={pricingMode}
+                supplierName={supplierName}
+                targetCurrency={targetCurrency}
+              />
+            </section>
+          )}
 
-      {hasFile && products.length > 0 && (
-        <ExportFab
-          canExport={canExport}
-          filteredProducts={filteredProducts}
-          isLoading={isLoading}
-          onExport={() => void handleExport()}
-          stage={stage}
-          supplierName={supplierName}
-        />
+          {hasFile && products.length > 0 && (
+            <ExportFab
+              canExport={canExport}
+              filteredProducts={filteredProducts}
+              isLoading={isLoading}
+              onExport={() => void handleExport()}
+              stage={stage}
+              supplierName={supplierName}
+            />
+          )}
+        </>
       )}
     </main>
   );

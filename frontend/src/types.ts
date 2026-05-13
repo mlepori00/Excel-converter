@@ -4,7 +4,15 @@ export type Stage =
   | "parsed"
   | "extracting"
   | "ready"
-  | "exporting";
+  | "exporting"
+  | "exported";
+
+export type ExportSummary = {
+  supplierName: string;
+  articleCount: number;
+  currency: string;
+  filename: string;
+};
 
 export type ProductRow = {
   row_id: number;
