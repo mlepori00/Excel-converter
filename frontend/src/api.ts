@@ -1,15 +1,28 @@
 import type { ParseResult, ProductRow, RowEdit } from "./types";
 
-export const API = "http://localhost:8000";
+export const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const _TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
+
+export function _authHeader(): Record<string, string> {
+  return _TOKEN ? { Authorization: `Bearer ${_TOKEN}` } : {};
+}
+
+function _extractDetail(err: unknown): string {
+  if (!err || typeof err !== "object") return String(err ?? "Unbekannter Fehler");
+  const detail = (err as Record<string, unknown>).detail;
+  if (Array.isArray(detail))
+    return detail.map((e) => (typeof e === "object" && e !== null ? (e as Record<string, unknown>).msg ?? JSON.stringify(e) : String(e))).join(" | ");
+  return String(detail ?? "Unbekannter Fehler");
+}
 
 export async function apiParse(file: File, forceReparse = false): Promise<ParseResult> {
   const form = new FormData();
   form.append("file", file);
   if (forceReparse) form.append("force_reparse", "true");
-  const resp = await fetch(`${API}/api/offer/parse`, { method: "POST", body: form });
+  const resp = await fetch(`${API}/api/offer/parse`, { method: "POST", headers: _authHeader(), body: form });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(err.detail ?? "Parse-Fehler");
+    throw new Error(_extractDetail(err));
   }
   return resp.json() as Promise<ParseResult>;
 }
@@ -17,7 +30,7 @@ export async function apiParse(file: File, forceReparse = false): Promise<ParseR
 export async function apiExtract(fileId: string, profileName?: string): Promise<ProductRow[]> {
   const resp = await fetch(`${API}/api/offer/extract`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
     body: JSON.stringify({ file_id: fileId, force_api: true, profile_name: profileName ?? null }),
   });
   if (!resp.ok) {
@@ -60,7 +73,7 @@ export async function apiExport(
 
   const resp = await fetch(`${API}/api/offer/export`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
     body: JSON.stringify({
       file_id: fileId,
       supplier_name: supplierName,
@@ -73,7 +86,7 @@ export async function apiExport(
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(err.detail ?? "Export-Fehler");
+    throw new Error(_extractDetail(err));
   }
   return resp.blob();
 }

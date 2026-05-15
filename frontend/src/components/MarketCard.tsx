@@ -29,7 +29,7 @@ export function MarketCard({
   }
 
   const eanCount = products.filter((p) => p.ean?.trim()).length;
-  const secs = Math.ceil((eanCount / 3) * 3.8);
+  const secs = Math.ceil(eanCount * 1.6);
   const timeStr = secs >= 60 ? `ca. ${Math.round(secs / 60)} min` : `ca. ${secs} s`;
   const foundCount = Object.keys(marketPrices).length;
 

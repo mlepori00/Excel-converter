@@ -36,11 +36,22 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ### 4. Run the app
 
-```bash
-streamlit run src/offerten_converter/main.py
+Two terminals are needed — start both simultaneously:
+
+**Terminal 1 – Python Backend (FastAPI)**
+```powershell
+$env:PYTHONPATH="src"; uvicorn offerten_converter.api.server:app --reload --port 8000
 ```
 
-Open `http://localhost:8501` in your browser.
+**Terminal 2 – React Frontend (Vite)**
+```powershell
+cd frontend
+npm run dev
+```
+
+Open `http://localhost:5173` in your browser.
+
+> **Tip:** Run `pip install -e .` once to install the package in editable mode — then you can omit `$env:PYTHONPATH="src"` from the backend command.
 
 ---
 

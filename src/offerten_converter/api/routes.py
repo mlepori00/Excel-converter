@@ -190,10 +190,31 @@ def _build_local_extraction(result: Any) -> pd.DataFrame | None:
     if not (has_identity and has_price and has_variant):
         return None
 
+    # Collect unmapped text columns with meaningful content into extra_fields.
+    # "Unmapped" = not a canonical field and not an internal unpivot column.
+    _internal = {"_size_from_col", "_qty_from_col"}
+    extra_cols = [
+        c for c in src.columns
+        if c not in _LOCAL_COLS and c not in _internal and src[c].dtype == object
+    ]
+    extra_cols = [
+        c for c in extra_cols
+        if pd.notna(avg := src[c].dropna().astype(str).str.strip().str.len().mean()) and avg > 3
+    ]
+
     df = pd.DataFrame(index=src.index)
     for col in _LOCAL_COLS:
         if col == "extra_fields":
-            df[col] = [{} for _ in range(len(src))]
+            if extra_cols:
+                def _build_extra(row: pd.Series) -> dict:
+                    return {
+                        str(c): str(row[c]).strip()
+                        for c in extra_cols
+                        if not (pd.isna(row[c]) or str(row[c]).strip() in ("", "nan", "None"))
+                    }
+                df[col] = [_build_extra(src.iloc[i]) for i in range(len(src))]
+            else:
+                df[col] = [{} for _ in range(len(src))]
         elif col in src.columns:
             df[col] = src[col].values
         else:
@@ -375,12 +396,11 @@ async def export_offer(body: ExportRequest) -> Response:
     enriched_rows: list[pd.DataFrame] = []
     for row in body.rows:
         row_dict = row.model_dump(exclude={"vk_manual", "margin_pct"})
+        if row.vk_manual is not None and row.vk_manual > 0:
+            row_dict["vk_target"] = float(row.vk_manual)
         row_df = pd.DataFrame([row_dict])
 
         enriched = enrich_dataframe(row_df, row.margin_pct, body.target_currency, rates)
-
-        if row.vk_manual is not None and row.vk_manual > 0:
-            enriched["vk_target"] = float(row.vk_manual)
 
         enriched_rows.append(enriched)
 
@@ -446,13 +466,13 @@ async def stream_market_prices(body: MarketPriceRequest):
     loop = asyncio.get_event_loop()
     total = len(unique_eans)
     results: list[tuple[str, float | None]] = []
-    sem = asyncio.Semaphore(3)
+    sem = asyncio.Semaphore(5)
 
     async def _fetch(ean: str) -> None:
         async with sem:
             price = await loop.run_in_executor(None, scraper.fetch_price, ean)
             results.append((ean, price))
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(0.5)
 
     async def _generate():
         tasks = [asyncio.create_task(_fetch(ean)) for ean in unique_eans]

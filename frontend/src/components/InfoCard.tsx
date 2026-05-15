@@ -8,6 +8,7 @@ type Props = {
   error: string;
   onExtract: () => void;
   onReparse: () => void;
+  onForceExtract: () => void;
 };
 
 export function InfoCard({
@@ -18,6 +19,7 @@ export function InfoCard({
   error,
   onExtract,
   onReparse,
+  onForceExtract,
 }: Props) {
   const extractionLabel = parseResult
     ? parseResult.extraction_mode === "local"
@@ -68,6 +70,11 @@ export function InfoCard({
       {parseResult?.extraction_mode === "cache" && !isLoading && (
         <button className="reparse-button" onClick={onReparse} type="button">
           Cache ignorieren &amp; neu laden
+        </button>
+      )}
+      {(parseResult?.extraction_mode === "local" || parseResult?.extraction_mode === "cache") && !isLoading && (
+        <button className="force-extract-button" onClick={onForceExtract} type="button">
+          Trotzdem mit KI extrahieren
         </button>
       )}
     </div>

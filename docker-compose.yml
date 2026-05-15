@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        VITE_API_TOKEN: ${VITE_API_TOKEN}
+    ports:
+      - "8000:8000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      API_SECRET_TOKEN: ${API_SECRET_TOKEN}
+    restart: unless-stopped

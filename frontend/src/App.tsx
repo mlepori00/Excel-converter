@@ -14,6 +14,7 @@ import {
   downloadBlob,
   inferSupplierName,
   API,
+  _authHeader,
 } from "./api";
 import type { ExportSummary, ParseResult, ProductRow, RowEdit, Stage } from "./types";
 
@@ -83,7 +84,7 @@ export default function App() {
     try {
       resp = await fetch(`${API}/api/offer/market-prices/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ..._authHeader() },
         body: JSON.stringify({ eans }),
         signal: controller.signal,
       });
@@ -344,6 +345,7 @@ export default function App() {
               isLoading={isLoading}
               needsAiExtraction={needsAiExtraction}
               onExtract={() => void handleExtract()}
+              onForceExtract={() => void handleExtract()}
               onReparse={() => void handleReparse()}
               parseResult={parseResult}
               products={products}

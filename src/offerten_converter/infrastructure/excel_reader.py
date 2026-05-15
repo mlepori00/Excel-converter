@@ -19,8 +19,11 @@ _TEXT_SIZES = frozenset([
 
 _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
     "sku": (
-        "sku", "code", "reference", "references", "internal ref", "ident",
-        "style", "styles", "style number", "artikelnummer", "artikelnr",
+        "sku", "item code", "article code", "product code", "art. code", "art code",
+        "reference", "references", "ref", "internal ref", "ident",
+        "model", "modell", "model number", "model no",
+        "style", "styles", "style number", "style no",
+        "artikelnummer", "artikelnr", "art.-nr", "art.nr",
     ),
     "ean": ("ean", "ean code", "upc", "upc/ean", "barcode", "gtin"),
     "product_name": (
@@ -44,14 +47,16 @@ _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "available_qty": (
         "available qty", "available quantity", "available q.ty", "stock",
-        "qty", "max qty", "quantity available", "bestand", "lager",
+        "qty", "max qty", "quantity available", "total", "total qty", "total available",
+        "bestand", "lager",
         "max. verfügbar", "max verfügbar", "max. verfuegbar", "max verfuegbar",
         "verfügbar", "verfuegbar",
     ),
     "ordered_qty": ("order", "ordered qty", "ordered quantity", "order qty", "bestellung"),
     "unit_price": (
         "offer price", "offer price eur€", "offer price eur", "whs", "whs (eur)",
-        "wholesale", "exw bcn", "deal", "net price", "unit price",
+        "whls", "whls / exw", "wholesale", "exw bcn", "exw", "deal", "net price", "unit price",
+        "cost", "cost price", "costs", "unit cost",
         "ek/stk", "ek stk", "ek pro stk", "ek/stück", "ek stück",
         "einkaufspreis", "nettopreis",
     ),
@@ -60,7 +65,7 @@ _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 _PRICE_FALLBACK_ALIASES = (
-    "rrp", "rrp (eur)", "retail price", "retail price eur€", "retail price eur"
+    "retail price", "retail price eur€", "retail price eur"
 )
 
 
@@ -325,7 +330,13 @@ def _dominant_currency(series: pd.Series) -> str | None:
 
 def _matches_alias(label: object, aliases: tuple[str, ...]) -> bool:
     normalized = _normalize_label(label)
-    return any(alias == normalized or alias in normalized for alias in aliases)
+    for alias in aliases:
+        if alias == normalized:
+            return True
+        # Substring match only at word boundaries so "code" doesn't hit "colorcode".
+        if re.search(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", normalized):
+            return True
+    return False
 
 
 def _column_mapping_hint(df: pd.DataFrame) -> dict[str, str]:
@@ -363,20 +374,50 @@ def _add_canonical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, st
     df = df.copy()
     mapping: dict[str, str] = {}
     if "_size_from_col" in df.columns and "size" not in df.columns:
-        df["size"] = df["_size_from_col"]
+        df["size"] = df["_size_from_col"].astype(str)
         mapping["size"] = "_size_from_col"
     if "_qty_from_col" in df.columns and "available_qty" not in df.columns:
         df["available_qty"] = df["_qty_from_col"]
         mapping["available_qty"] = "_qty_from_col"
 
+    # Case-insensitive lookup so "SKU", "Sku", "sku" all resolve to the same column.
+    # Built once here; exact name match always beats alias search.
+    col_lower = {str(c).strip().lower(): c for c in df.columns}
+
     for canonical, aliases in _CANONICAL_ALIASES.items():
         if canonical in df.columns:
             mapping.setdefault(canonical, canonical)
+            continue
+        if canonical in col_lower:
+            actual = col_lower[canonical]
+            df[canonical] = df[actual]
+            mapping[canonical] = str(actual)
             continue
         source = _find_column(df, aliases)
         if source is not None:
             df[canonical] = df[source]
             mapping[canonical] = str(source)
+
+    # Heuristic fallback for product_name: if no alias matched, pick the unmapped
+    # text column with the longest average value. Product names are structurally
+    # the most descriptive (longest) text field in supplier offers.
+    if "product_name" not in df.columns:
+        already_used = set(mapping.values()) | {"_size_from_col", "_qty_from_col"}
+        text_cols = [
+            c for c in df.columns
+            if c not in already_used and df[c].dtype == object
+        ]
+        if text_cols:
+            avg_lengths = {
+                c: df[c].dropna().astype(str).str.strip().str.len().mean()
+                for c in text_cols
+            }
+            # Filter NaN averages (e.g. image/empty columns) before max()
+            valid = {c: l for c, l in avg_lengths.items() if pd.notna(l) and l > 8}
+            if valid:
+                best_col = max(valid, key=valid.get)
+                df["product_name"] = df[best_col]
+                mapping["product_name"] = str(best_col)
 
     if "unit_price" not in df.columns:
         fallback = _find_column(df, _PRICE_FALLBACK_ALIASES)

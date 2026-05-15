@@ -1,0 +1,14 @@
+.venv/
+.git/
+.claude/
+.idea/
+__pycache__/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+.env
+tests/
+demo/
+scrapling_test/
+*.md
