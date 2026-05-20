@@ -403,6 +403,10 @@ def _add_canonical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, st
     # the most descriptive (longest) text field in supplier offers.
     if "product_name" not in df.columns:
         already_used = set(mapping.values()) | {"_size_from_col", "_qty_from_col"}
+        # SKU source column may also serve as product_name in fashion contexts
+        # (e.g. "Model" = "Arizona" is both the SKU and the product name at Birkenstock).
+        if "sku" in mapping:
+            already_used.discard(mapping["sku"])
         text_cols = [
             c for c in df.columns
             if c not in already_used and df[c].dtype == object
