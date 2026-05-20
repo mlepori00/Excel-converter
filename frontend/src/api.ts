@@ -1,4 +1,4 @@
-import type { ParseResult, ProductRow, RowEdit } from "./types";
+import type { MapColumnsResult, ParseResult, ProductRow, RowEdit } from "./types";
 
 export const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 const _TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
@@ -25,6 +25,19 @@ export async function apiParse(file: File, forceReparse = false): Promise<ParseR
     throw new Error(_extractDetail(err));
   }
   return resp.json() as Promise<ParseResult>;
+}
+
+export async function apiMapColumns(fileId: string): Promise<MapColumnsResult> {
+  const resp = await fetch(`${API}/api/offer/map-columns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+    body: JSON.stringify({ file_id: fileId }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.json() as Promise<MapColumnsResult>;
 }
 
 export async function apiExtract(fileId: string, profileName?: string): Promise<ProductRow[]> {

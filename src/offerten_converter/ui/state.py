@@ -21,6 +21,9 @@ def init_state():
         "_rates_loaded": False,
         "market_prices": {},           # {ean: price_chf}
         "market_prices_fetched": False,
+        "column_mapping": None,        # {original_col: canonical_field} from Claude
+        "column_mapping_done": False,
+        "column_mapping_skipped": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -37,6 +40,9 @@ def clear_extraction():
     st.session_state["market_prices"] = {}
     st.session_state["market_prices_fetched"] = False
     st.session_state["force_api_extract"] = False
+    st.session_state["column_mapping"] = None
+    st.session_state["column_mapping_done"] = False
+    st.session_state["column_mapping_skipped"] = False
 
 
 def get_settings() -> dict:

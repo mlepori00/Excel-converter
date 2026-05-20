@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 
 import { ExportFab } from "./components/ExportFab";
+import { HeaderCard } from "./components/HeaderCard";
 import { ImportCard } from "./components/ImportCard";
 import { InfoCard } from "./components/InfoCard";
 import { MarketCard } from "./components/MarketCard";
@@ -10,13 +11,14 @@ import { SettingsCard } from "./components/SettingsCard";
 import {
   apiExport,
   apiExtract,
+  apiMapColumns,
   apiParse,
   downloadBlob,
   inferSupplierName,
   API,
   _authHeader,
 } from "./api";
-import type { ExportSummary, ParseResult, ProductRow, RowEdit, Stage } from "./types";
+import type { ExportSummary, MapColumnsResult, ParseResult, ProductRow, RowEdit, Stage } from "./types";
 
 export default function App() {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -39,9 +41,17 @@ export default function App() {
 
   const [pricingMode, setPricingMode] = useState<"margin" | "market">("margin");
   const [marketDiscount, setMarketDiscount] = useState(20);
-  const [scrapeEnabled, setScrapeEnabled] = useState(false);
+  const [isSampling, setIsSampling] = useState(false);
+  const [sampleResult, setSampleResult] = useState<{
+    hit: number;
+    total: number;
+    eans: Array<{ ean: string; found: boolean }>;
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [exportSummary, setExportSummary] = useState<ExportSummary | null>(null);
+  const [isMappingColumns, setIsMappingColumns] = useState(false);
+  const [columnMappingResult, setColumnMappingResult] = useState<MapColumnsResult | null>(null);
+  const [mappingError, setMappingError] = useState("");
 
   const needsAiExtraction =
     parseResult !== null && parseResult.extraction_mode === "none" && products.length === 0;
@@ -163,7 +173,6 @@ export default function App() {
       if (result.products.length > 0) {
         setProducts(result.products);
         setStage("ready");
-        if (scrapeEnabled) void loadMarketPrices(result.products);
       } else {
         setStage("parsed");
       }
@@ -191,13 +200,30 @@ export default function App() {
       if (result.products.length > 0) {
         setProducts(result.products);
         setStage("ready");
-        if (scrapeEnabled) void loadMarketPrices(result.products);
       } else {
         setStage("parsed");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fehler beim Neu-Laden");
       setStage("ready");
+    }
+  }
+
+  async function handleMapColumns() {
+    if (!parseResult) return;
+    setIsMappingColumns(true);
+    setMappingError("");
+    try {
+      const result = await apiMapColumns(parseResult.file_id);
+      setColumnMappingResult(result);
+      if (result.products.length > 0) {
+        setProducts(result.products);
+        setStage("ready");
+      }
+    } catch (e) {
+      setMappingError(e instanceof Error ? e.message : "Fehler bei Header-Analyse");
+    } finally {
+      setIsMappingColumns(false);
     }
   }
 
@@ -209,7 +235,6 @@ export default function App() {
       const rows = await apiExtract(parseResult.file_id);
       setProducts(rows);
       setStage("ready");
-      if (scrapeEnabled) void loadMarketPrices(rows);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Extraktions-Fehler");
       setStage("parsed");
@@ -264,16 +289,99 @@ export default function App() {
     }
   }
 
-  function handleScrapeToggle(checked: boolean) {
-    setScrapeEnabled(checked);
-    if (checked && products.length > 0) {
-      void loadMarketPrices(products);
-    } else if (!checked) {
-      scrapeAbortRef.current?.abort();
-      setMarketPrices({});
-      setScrapingStatus("");
-      setScrapingProgress(null);
+  async function handleSample() {
+    const allEans = [
+      ...new Set(products.map((p) => p.ean?.trim() ?? "").filter((e) => e.length > 0)),
+    ];
+    if (allEans.length === 0) return;
+
+    const shuffled = [...allEans].sort(() => Math.random() - 0.5);
+    const sampleEans = shuffled.slice(0, Math.min(10, allEans.length));
+
+    scrapeAbortRef.current?.abort();
+    const controller = new AbortController();
+    scrapeAbortRef.current = controller;
+
+    setIsSampling(true);
+    setSampleResult(null);
+    setMarketPrices({});
+    setScrapingStatus("");
+    setScrapingProgress({ done: 0, total: sampleEans.length });
+
+    let resp: Response;
+    try {
+      resp = await fetch(`${API}/api/offer/market-prices/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ..._authHeader() },
+        body: JSON.stringify({ eans: sampleEans }),
+        signal: controller.signal,
+      });
+    } catch {
+      if (!controller.signal.aborted) setScrapingProgress(null);
+      setIsSampling(false);
+      return;
     }
+
+    if (!resp.ok || !resp.body) {
+      setScrapingProgress(null);
+      setIsSampling(false);
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const prices: Record<string, number> = {};
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6)) as {
+              ean: string;
+              price: number | null;
+              done: number;
+              total: number;
+              finished: boolean;
+            };
+            if (ev.price != null) prices[ev.ean] = ev.price;
+            setScrapingProgress({ done: ev.done, total: ev.total });
+            setMarketPrices({ ...prices });
+            if (ev.finished) {
+              setScrapingProgress(null);
+              setSampleResult({
+                hit: Object.keys(prices).length,
+                total: sampleEans.length,
+                eans: sampleEans.map((e) => ({ ean: e, found: e in prices })),
+              });
+              setIsSampling(false);
+            }
+          } catch {
+            // malformed SSE line – skip
+          }
+        }
+      }
+    } catch {
+      if (!controller.signal.aborted) setScrapingProgress(null);
+      setIsSampling(false);
+    }
+  }
+
+  function handleScrapeAll() {
+    void loadMarketPrices(products);
+  }
+
+  function handleStopScrape() {
+    scrapeAbortRef.current?.abort();
+    setIsSampling(false);
+    setScrapingProgress(null);
+    setScrapingStatus("Suche abgebrochen");
   }
 
   function handleReset() {
@@ -287,8 +395,11 @@ export default function App() {
     setMarketPrices({});
     setScrapingStatus("");
     setScrapingProgress(null);
-    setScrapeEnabled(false);
+    setIsSampling(false);
+    setSampleResult(null);
     setExportSummary(null);
+    setColumnMappingResult(null);
+    setMappingError("");
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -340,24 +451,43 @@ export default function App() {
                 parseResult={parseResult}
                 stage={stage}
             />
-            <InfoCard
-              error={error}
+            <div className="action-panel">
+              <InfoCard
+                columnMappingResult={columnMappingResult}
+                error={error}
+                isLoading={isLoading}
+                isMappingColumns={isMappingColumns}
+                mappingError={mappingError}
+                needsAiExtraction={needsAiExtraction}
+                onExtract={() => void handleExtract()}
+                onForceExtract={() => void handleExtract()}
+                onMapColumns={() => void handleMapColumns()}
+                onReparse={() => void handleReparse()}
+                parseResult={parseResult}
+                products={products}
+              />
+              {products.length > 0 && (
+                <MarketCard
+                  hasFile={hasFile}
+                  isSampling={isSampling}
+                  marketPrices={marketPrices}
+                  onSample={() => void handleSample()}
+                  onScrapeAll={handleScrapeAll}
+                  onStop={handleStopScrape}
+                  products={products}
+                  sampleResult={sampleResult}
+                  scrapingProgress={scrapingProgress}
+                  scrapingStatus={scrapingStatus}
+                />
+              )}
+            </div>
+            <HeaderCard
+              columnMappingResult={columnMappingResult}
               isLoading={isLoading}
-              needsAiExtraction={needsAiExtraction}
-              onExtract={() => void handleExtract()}
-              onForceExtract={() => void handleExtract()}
-              onReparse={() => void handleReparse()}
+              isMappingColumns={isMappingColumns}
+              mappingError={mappingError}
+              onMapColumns={() => void handleMapColumns()}
               parseResult={parseResult}
-              products={products}
-            />
-            <MarketCard
-              hasFile={hasFile}
-              marketPrices={marketPrices}
-              onScrapeToggle={handleScrapeToggle}
-              products={products}
-              scrapeEnabled={scrapeEnabled}
-              scrapingProgress={scrapingProgress}
-              scrapingStatus={scrapingStatus}
             />
           </section>
 

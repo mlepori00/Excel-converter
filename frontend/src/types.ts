@@ -45,10 +45,19 @@ export type ParseResult = {
   extraction_mode: string;
   products: ProductRow[];
   api_cost_estimate_chf: number | null;
+  map_columns_cost_estimate_chf: number | null;
 };
 
 export type RowEdit = {
   ordered_qty: number | null;
   vk_manual: number | null;
   margin_pct: number;
+};
+
+export type MapColumnsResult = {
+  mapped_fields: Record<string, string>; // {canonical_field: original_column}
+  columns_total: number;
+  columns_mapped: number;
+  unmapped_columns: string[];
+  products: ProductRow[];
 };

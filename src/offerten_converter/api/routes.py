@@ -29,6 +29,7 @@ from offerten_converter.application.sanitize_data import sanitize_dataframe
 from offerten_converter.domain.pricing import DEFAULT_RATES
 from offerten_converter.infrastructure import extraction_cache
 from offerten_converter.infrastructure.ai_extractors import get_call_fn
+from offerten_converter.infrastructure.column_mapper import apply_mapping, estimate_cost_chf, map_columns
 from offerten_converter.infrastructure.excel_reader import (
     get_recommended_sheet_name,
     get_sheet_names,
@@ -72,6 +73,19 @@ class ParseResponse(BaseModel):
     extraction_mode: str          # "local" | "cache" | "none"
     products: list[dict]          # ProductRow dicts
     api_cost_estimate_chf: float | None
+    map_columns_cost_estimate_chf: float | None
+
+
+class MapColumnsRequest(BaseModel):
+    file_id: str
+
+
+class MapColumnsResponse(BaseModel):
+    mapped_fields: dict[str, str]   # {canonical_field: original_column}
+    columns_total: int
+    columns_mapped: int
+    unmapped_columns: list[str]     # original column names not assigned to any field
+    products: list[dict]
 
 
 class ExtractRequest(BaseModel):
@@ -135,7 +149,8 @@ def _parse_file(file_bytes: bytes, filename: str, sheet_name: str | None) -> Any
     if sheet_name and sheet_name not in sheets:
         raise HTTPException(400, f"Sheet '{sheet_name}' nicht gefunden. Verfügbar: {sheets}")
     chosen = sheet_name or get_recommended_sheet_name(file_bytes, filename) or (sheets[0] if sheets else None)
-    return read_offer_file(file_bytes, filename, chosen), sheets, chosen
+    result = read_offer_file(file_bytes, filename, chosen)
+    return result, sheets, chosen
 
 
 def _try_local_or_cache(
@@ -241,6 +256,19 @@ def _enforce_import_truth(extracted: pd.DataFrame, import_df: pd.DataFrame) -> p
     return df
 
 
+def _map_columns_cost(result: Any) -> float:
+    """Estimate CHF cost of the Haiku column-mapper for this file's original columns."""
+    heuristic_mapping = result.metadata_hints.get("column_mapping", {})
+    heuristic_added = {c for c, orig in heuristic_mapping.items() if c != orig}
+    original_cols = [
+        str(c) for c in result.df.columns
+        if not str(c).startswith("_") and str(c) not in heuristic_added
+    ]
+    if not original_cols:
+        return 0.0
+    return estimate_cost_chf(result.df[original_cols])
+
+
 def _api_cost_estimate(text: str) -> float:
     from offerten_converter.application.extract_products import (
         SYSTEM_PROMPT,
@@ -296,10 +324,8 @@ async def parse_offer(
     if products_df is not None:
         products = [_row_to_dict(row) for row in dataframe_to_product_rows(products_df)]
 
-    cost: float | None = None
-    if mode == "none":
-        sanitized_text = df_clean.to_string(index=False)
-        cost = _api_cost_estimate(sanitized_text)
+    sanitized_text = df_clean.to_string(index=False)
+    cost = _api_cost_estimate(sanitized_text)
 
     hints = result.metadata_hints
     return ParseResponse(
@@ -317,6 +343,66 @@ async def parse_offer(
         extraction_mode=mode,
         products=products,
         api_cost_estimate_chf=cost,
+        map_columns_cost_estimate_chf=_map_columns_cost(result),
+    )
+
+
+@router.post("/offer/map-columns", response_model=MapColumnsResponse)
+async def map_offer_columns(body: MapColumnsRequest) -> MapColumnsResponse:
+    """
+    Run Claude Haiku column mapping on a previously uploaded file.
+    Returns the detected field mapping and re-runs local extraction with improved columns.
+    """
+    entry = file_store.get(body.file_id)
+    if entry is None:
+        raise HTTPException(404, "Datei nicht gefunden oder abgelaufen. Bitte erneut hochladen.")
+
+    file_bytes, filename = entry
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(500, "ANTHROPIC_API_KEY nicht gesetzt.")
+
+    result, _, _ = _parse_file(file_bytes, filename, None)
+
+    # The heuristic (_add_canonical_columns) adds canonical columns to result.df
+    # while keeping the originals. We must exclude those heuristic-added columns
+    # so Claude only sees the real original columns from the file.
+    heuristic_mapping = result.metadata_hints.get("column_mapping", {})
+    heuristic_added = {
+        canonical for canonical, original in heuristic_mapping.items()
+        if canonical != original
+    }
+    original_cols = [
+        str(c) for c in result.df.columns
+        if not str(c).startswith("_") and str(c) not in heuristic_added
+    ]
+    n_total = len(original_cols)
+
+    df_for_claude = result.df[original_cols]
+    mapping = map_columns(df_for_claude, api_key)
+    applied: dict[str, str] = {}
+    if mapping:
+        result.df, applied = apply_mapping(result.df, mapping)
+        result.metadata_hints["column_mapping"] = applied
+
+    mapped_originals = set(applied.values())
+    unmapped = [c for c in original_cols if c not in mapped_originals]
+
+    products_df = _build_local_extraction(result)
+    products: list[dict] = []
+    if products_df is not None:
+        products_df = _enforce_import_truth(products_df, result.df)
+        source_sheet = result.metadata_hints.get("source_sheet")
+        extraction_cache.save(extraction_cache.cache_key(file_bytes, source_sheet), products_df)
+        extraction_cache.save(extraction_cache.file_hash(file_bytes), products_df)
+        products = [_row_to_dict(row) for row in dataframe_to_product_rows(products_df)]
+
+    return MapColumnsResponse(
+        mapped_fields=applied,
+        columns_total=n_total,
+        columns_mapped=len(applied),
+        unmapped_columns=unmapped,
+        products=products,
     )
 
 
@@ -336,6 +422,12 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
         raise HTTPException(500, "ANTHROPIC_API_KEY nicht gesetzt.")
 
     result, _, _ = _parse_file(file_bytes, filename, body.sheet_name)
+
+    col_mapping = map_columns(result.df, api_key)
+    if col_mapping:
+        result.df, applied = apply_mapping(result.df, col_mapping)
+        result.metadata_hints["column_mapping"] = applied
+
     df_raw = result.df
     df_clean, _ = sanitize_dataframe(df_raw)
     sanitized_text = df_clean.to_string(index=False)

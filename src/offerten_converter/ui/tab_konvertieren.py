@@ -18,6 +18,7 @@ from offerten_converter.application.manage_profiles import profile_to_hints
 from offerten_converter.application.sanitize_data import sanitize_dataframe
 from offerten_converter.infrastructure import extraction_cache
 from offerten_converter.infrastructure.ai_extractors import get_call_fn
+from offerten_converter.infrastructure.column_mapper import apply_mapping, map_columns
 from offerten_converter.infrastructure.excel_reader import (
     get_recommended_sheet_name,
     get_sheet_names,
@@ -430,6 +431,67 @@ def render():
     if result.metadata_hints.get("detected_currency"):
         file_info += f" | Währung erkannt: {result.metadata_hints['detected_currency']}"
     render_status_card("Datei erkannt", file_info)
+
+    st.divider()
+    render_panel_heading("Header analysieren", "scan")
+    render_section(
+        "Schritt 2",
+        "Spalten zuordnen",
+        "Claude liest den Header und erkennt welche Spalte welches Feld enthält. "
+        "Günstige Einmalanalyse pro Datei.",
+    )
+
+    mapping_done = st.session_state.get("column_mapping_done", False)
+    mapping_skipped = st.session_state.get("column_mapping_skipped", False)
+    stored_mapping = st.session_state.get("column_mapping")
+
+    if stored_mapping is not None:
+        n_mapped = len(stored_mapping)
+        n_total = len([c for c in result.df.columns if not str(c).startswith("_")])
+        readable = ", ".join(f"{v} → {k}" for k, v in stored_mapping.items())
+        if n_mapped == 0:
+            st.warning("Keine Felder erkannt – Dateistruktur ungewöhnlich. Manuelle Prüfung empfohlen.")
+        elif n_mapped < 3:
+            st.warning(f"Nur {n_mapped}/{n_total} Spalten erkannt: {readable}")
+        else:
+            st.success(f"{n_mapped}/{n_total} Spalten erkannt: {readable}")
+        result.df, applied = apply_mapping(result.df, stored_mapping)
+        result.metadata_hints["column_mapping"] = applied
+    elif mapping_skipped:
+        st.info("Header-Analyse übersprungen – Basis-Heuristik aktiv.")
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    col_hdr_btn, col_hdr_cost, col_hdr_skip = st.columns([2, 2, 1])
+    with col_hdr_btn:
+        header_btn = st.button(
+            "Erneut analysieren" if mapping_done else "Header analysieren",
+            type="secondary" if mapping_done else "primary",
+            use_container_width=True,
+            disabled=not api_key,
+            help=None if api_key else "ANTHROPIC_API_KEY nicht gesetzt.",
+        )
+    with col_hdr_cost:
+        st.write("")
+        st.caption("Kosten: < CHF 0.01 (Claude Haiku)")
+    with col_hdr_skip:
+        if not mapping_done and not mapping_skipped:
+            if st.button("Überspringen", use_container_width=True):
+                st.session_state["column_mapping_skipped"] = True
+                st.rerun()
+
+    if header_btn:
+        if not api_key:
+            st.error("ANTHROPIC_API_KEY nicht gesetzt. Bitte in der .env-Datei eintragen.")
+        else:
+            with st.spinner("Spalten werden analysiert …"):
+                new_mapping = map_columns(result.df, api_key)
+            st.session_state["column_mapping"] = new_mapping
+            st.session_state["column_mapping_done"] = True
+            st.session_state["column_mapping_skipped"] = False
+            st.rerun()
+
+    if not mapping_done and not mapping_skipped:
+        return
 
     st.divider()
     render_panel_heading("Produkte erkennen", "scan")

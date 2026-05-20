@@ -417,7 +417,7 @@ def _add_canonical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, st
                 for c in text_cols
             }
             # Filter NaN averages (e.g. image/empty columns) before max()
-            valid = {c: l for c, l in avg_lengths.items() if pd.notna(l) and l > 8}
+            valid = {c: l for c, l in avg_lengths.items() if pd.notna(l) and l > 3}
             if valid:
                 best_col = max(valid, key=valid.get)
                 df["product_name"] = df[best_col]

@@ -6,8 +6,11 @@ type Props = {
   marketPrices: Record<string, number>;
   scrapingProgress: { done: number; total: number } | null;
   scrapingStatus: string;
-  scrapeEnabled: boolean;
-  onScrapeToggle: (checked: boolean) => void;
+  isSampling: boolean;
+  sampleResult: { hit: number; total: number; eans: Array<{ ean: string; found: boolean }> } | null;
+  onSample: () => void;
+  onScrapeAll: () => void;
+  onStop: () => void;
 };
 
 export function MarketCard({
@@ -16,8 +19,11 @@ export function MarketCard({
   marketPrices,
   scrapingProgress,
   scrapingStatus,
-  scrapeEnabled,
-  onScrapeToggle,
+  isSampling,
+  sampleResult,
+  onSample,
+  onScrapeAll,
+  onStop,
 }: Props) {
   if (!hasFile || products.length === 0) {
     return (
@@ -32,6 +38,15 @@ export function MarketCard({
   const secs = Math.ceil(eanCount * 1.6);
   const timeStr = secs >= 60 ? `ca. ${Math.round(secs / 60)} min` : `ca. ${secs} s`;
   const foundCount = Object.keys(marketPrices).length;
+  const isBusy = scrapingProgress !== null || isSampling;
+
+  const hitPct = sampleResult
+    ? Math.round((sampleResult.hit / sampleResult.total) * 100)
+    : null;
+  const expectedFull =
+    sampleResult && sampleResult.hit > 0
+      ? Math.round(eanCount * (sampleResult.hit / sampleResult.total))
+      : null;
 
   return (
     <div className="card market-card">
@@ -54,34 +69,86 @@ export function MarketCard({
         </div>
       </div>
 
-      <p className="market-desc">
-        Aktuelle Marktpreise von Toppreise.ch abrufen und als Grundlage für die VK-Kalkulation
-        verwenden.
-      </p>
+      {sampleResult && !isBusy && (
+        <div
+          className={`market-sample-badge ${
+            hitPct! >= 50 ? "market-sample-badge--ok" : "market-sample-badge--warn"
+          }`}
+        >
+          <span className="market-sample-rate">
+            {sampleResult.hit}/{sampleResult.total} Stichproben gefunden ({hitPct}%)
+          </span>
+          {expectedFull !== null ? (
+            <span className="market-sample-estimate">
+              ~ {expectedFull} von {eanCount} EANs zu erwarten
+            </span>
+          ) : (
+            <span className="market-sample-estimate">Keine Treffer erwartet</span>
+          )}
+          <div className="market-sample-eans">
+            {sampleResult.eans.map(({ ean, found }) => (
+              <span
+                key={ean}
+                className={`market-sample-ean ${found ? "market-sample-ean--found" : "market-sample-ean--miss"}`}
+              >
+                {found ? "✓" : "✗"} {ean}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {scrapingProgress !== null && (
         <div className="market-progress">
           <div
             className="market-progress-bar"
-            style={{ width: `${Math.round((scrapingProgress.done / scrapingProgress.total) * 100)}%` }}
+            style={{
+              width: `${Math.round((scrapingProgress.done / scrapingProgress.total) * 100)}%`,
+            }}
           />
           <span>
+            {isSampling ? "Stichprobe " : ""}
             {scrapingProgress.done} / {scrapingProgress.total}
           </span>
         </div>
       )}
-      {scrapingStatus && scrapingProgress === null && (
+
+      {scrapingStatus && !isBusy && (
         <p className="market-status">{scrapingStatus}</p>
       )}
 
-      <button
-        className={scrapeEnabled ? "market-btn market-btn--stop" : "market-btn market-btn--start"}
-        disabled={eanCount === 0}
-        onClick={() => onScrapeToggle(!scrapeEnabled)}
-        type="button"
-      >
-        {scrapeEnabled ? "Suche stoppen" : "Marktpreise suchen"}
-      </button>
+      {isBusy ? (
+        <button className="market-btn market-btn--stop" onClick={onStop} type="button">
+          Stoppen
+        </button>
+      ) : sampleResult ? (
+        <div className="market-btn-row">
+          <button
+            className="market-btn market-btn--start"
+            disabled={eanCount === 0}
+            onClick={onScrapeAll}
+            type="button"
+          >
+            Alle {eanCount} EANs laden
+          </button>
+          <button
+            className="market-btn market-btn--stop"
+            onClick={onSample}
+            type="button"
+          >
+            Neue Stichprobe
+          </button>
+        </div>
+      ) : (
+        <button
+          className="market-btn market-btn--start"
+          disabled={eanCount === 0}
+          onClick={onSample}
+          type="button"
+        >
+          Stichprobe prüfen
+        </button>
+      )}
     </div>
   );
 }
