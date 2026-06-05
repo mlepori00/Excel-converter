@@ -14,13 +14,27 @@ import {
   apiMapColumns,
   apiParse,
   downloadBlob,
+  handleUnauthorized,
   inferSupplierName,
   API,
   _authHeader,
 } from "./api";
-import type { ExportSummary, MapColumnsResult, ParseResult, ProductRow, RowEdit, Stage } from "./types";
+import type {
+  AuthUser,
+  ExportSummary,
+  MapColumnsResult,
+  ParseResult,
+  ProductRow,
+  RowEdit,
+  Stage,
+} from "./types";
 
-export default function App() {
+type AppProps = {
+  user: AuthUser;
+  onLogout: () => void;
+};
+
+export default function App({ user, onLogout }: AppProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scrapeAbortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<File | null>(null);
@@ -105,6 +119,7 @@ export default function App() {
       return;
     }
 
+    if (handleUnauthorized(resp.status)) return;
     if (!resp.ok || !resp.body) {
       setScrapingProgress(null);
       setScrapingStatus("Marktpreis-Abfrage fehlgeschlagen");
@@ -271,7 +286,8 @@ export default function App() {
         margin,
         filteredProducts,
         effectiveEdits,
-        marketPrices
+        marketPrices,
+        user.name
       );
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const filename = `Offerte_${supplierName.trim().replace(/\s+/g, "_")}_${today}.xlsx`;
@@ -322,6 +338,10 @@ export default function App() {
       return;
     }
 
+    if (handleUnauthorized(resp.status)) {
+      setIsSampling(false);
+      return;
+    }
     if (!resp.ok || !resp.body) {
       setScrapingProgress(null);
       setIsSampling(false);
@@ -430,6 +450,12 @@ export default function App() {
           <img src="/logo.png" alt="AMP Sport" className="brand-logo" />
           <span className="brand-divider" />
           <span className="brand-sub">Offerten Converter</span>
+        </div>
+        <div className="user-menu">
+          <span className="user-name">{user.name}</span>
+          <button type="button" className="logout-btn" onClick={onLogout}>
+            Abmelden
+          </button>
         </div>
       </header>
 

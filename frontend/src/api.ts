@@ -1,10 +1,63 @@
-import type { MapColumnsResult, ParseResult, ProductRow, RowEdit } from "./types";
+import type { AuthUser, MapColumnsResult, ParseResult, ProductRow, RowEdit } from "./types";
 
 export const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-const _TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
+
+// JWT is obtained at login and kept across reloads in localStorage.
+const TOKEN_KEY = "oc_token";
+let _token: string | null =
+  typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
+let _onAuthError: (() => void) | null = null;
+
+export function setToken(token: string | null): void {
+  _token = token;
+  if (typeof localStorage === "undefined") return;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getToken(): string | null {
+  return _token;
+}
+
+/** Register a callback invoked whenever the server rejects the token (401). */
+export function setAuthErrorHandler(fn: (() => void) | null): void {
+  _onAuthError = fn;
+}
 
 export function _authHeader(): Record<string, string> {
-  return _TOKEN ? { Authorization: `Bearer ${_TOKEN}` } : {};
+  return _token ? { Authorization: `Bearer ${_token}` } : {};
+}
+
+/** Clear the token and notify the app when a request comes back unauthorized. */
+export function handleUnauthorized(status: number): boolean {
+  if (status !== 401) return false;
+  setToken(null);
+  _onAuthError?.();
+  return true;
+}
+
+export async function apiLogin(email: string, password: string): Promise<AuthUser> {
+  const resp = await fetch(`${API}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  const data = (await resp.json()) as { access_token: string; user: AuthUser };
+  setToken(data.access_token);
+  return data.user;
+}
+
+export async function apiMe(): Promise<AuthUser> {
+  const resp = await fetch(`${API}/api/auth/me`, { headers: { ..._authHeader() } });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    throw new Error("Nicht authentifiziert");
+  }
+  return resp.json() as Promise<AuthUser>;
 }
 
 function _extractDetail(err: unknown): string {
@@ -21,6 +74,7 @@ export async function apiParse(file: File, forceReparse = false): Promise<ParseR
   if (forceReparse) form.append("force_reparse", "true");
   const resp = await fetch(`${API}/api/offer/parse`, { method: "POST", headers: _authHeader(), body: form });
   if (!resp.ok) {
+    handleUnauthorized(resp.status);
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(_extractDetail(err));
   }
@@ -34,6 +88,7 @@ export async function apiMapColumns(fileId: string): Promise<MapColumnsResult> {
     body: JSON.stringify({ file_id: fileId }),
   });
   if (!resp.ok) {
+    handleUnauthorized(resp.status);
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(_extractDetail(err));
   }
@@ -47,6 +102,7 @@ export async function apiExtract(fileId: string, profileName?: string): Promise<
     body: JSON.stringify({ file_id: fileId, force_api: true, profile_name: profileName ?? null }),
   });
   if (!resp.ok) {
+    handleUnauthorized(resp.status);
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(err.detail ?? "Extraktions-Fehler");
   }
@@ -61,7 +117,8 @@ export async function apiExport(
   defaultMargin: number,
   products: ProductRow[],
   edits: Record<number, RowEdit>,
-  marketPrices: Record<string, number>
+  marketPrices: Record<string, number>,
+  createdBy: string
 ): Promise<Blob> {
   const rows = products.map((p) => {
     const edit = edits[p.row_id] ?? { ordered_qty: null, vk_manual: null, margin_pct: defaultMargin };
@@ -90,7 +147,7 @@ export async function apiExport(
     body: JSON.stringify({
       file_id: fileId,
       supplier_name: supplierName,
-      created_by: "AMP Sport GmbH",
+      created_by: createdBy,
       target_currency: targetCurrency,
       valid_days: 30,
       default_margin_pct: defaultMargin,
@@ -98,6 +155,7 @@ export async function apiExport(
     }),
   });
   if (!resp.ok) {
+    handleUnauthorized(resp.status);
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(_extractDetail(err));
   }

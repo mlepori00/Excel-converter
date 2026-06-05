@@ -1368,3 +1368,116 @@ td:has(.qty-input) { background: #f0f7ff !important; }
   .hero { grid-template-columns: 1fr; padding-top: 32px; }
   .sales-app { width: calc(100% - 32px); }
 }
+
+/* ── Header user menu ────────────────────────────────────────────────────── */
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.logout-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--r-sm);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+.logout-btn:hover { background: rgba(255, 255, 255, 0.2); }
+
+/* ── Login screen ────────────────────────────────────────────────────────── */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--navy-mid) 0%, var(--navy) 60%, #001040 100%);
+  padding: 24px;
+}
+
+.login-loading { color: rgba(255, 255, 255, 0.8); font-size: 15px; }
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--white);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 36px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.login-logo {
+  height: 44px;
+  width: auto;
+  object-fit: contain;
+  align-self: center;
+}
+
+.login-title {
+  margin: 0;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.login-sub {
+  margin: -8px 0 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sub);
+}
+
+.login-field input {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--ink);
+}
+.login-field input:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--cyan-soft);
+}
+
+.login-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--red);
+}
+
+.login-submit {
+  margin-top: 4px;
+  background: var(--navy);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 11px;
+  font-size: 14px;
+  font-weight: 700;
+  transition: background 0.15s ease;
+}
+.login-submit:hover:not(:disabled) { background: var(--navy-mid); }
+.login-submit:disabled { opacity: 0.6; }
