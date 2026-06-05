@@ -56,6 +56,19 @@ class MarketPricePort(ABC):
         ...
 
 
+class SpreadsheetPreviewRenderer(ABC):
+    """Port for rendering a spreadsheet to a standalone HTML preview document."""
+
+    @abstractmethod
+    def to_html(self, data: bytes, *, src_suffix: str) -> str:
+        """Render the given spreadsheet bytes to a self-contained HTML document.
+
+        ``src_suffix`` is the source file extension (e.g. ``.xlsx``) so the
+        renderer can pick the right reader.
+        """
+        ...
+
+
 class UserRepository(ABC):
     """Port for application-user persistence."""
 

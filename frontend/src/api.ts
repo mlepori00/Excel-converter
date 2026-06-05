@@ -193,12 +193,44 @@ export async function apiExport(
   return { blob, offerId: offerIdHeader ? Number(offerIdHeader) : null };
 }
 
-/** Distinct brand names from existing offers (for create-flow autocomplete). */
-export async function apiBrands(): Promise<string[]> {
+export type BrandSupplierIndex = {
+  /** All distinct brand names, alphabetically. */
+  brands: string[];
+  /** All distinct supplier names across every brand, alphabetically. */
+  allSuppliers: string[];
+  /** Suppliers seen per brand (key = brand name), for prioritized suggestions. */
+  suppliersByBrand: Record<string, string[]>;
+};
+
+/**
+ * Build the brand/supplier suggestion index from the archive tree so the
+ * create flow can offer existing names (avoids duplicate / mis-spelled entries).
+ */
+export async function apiBrandSupplierIndex(): Promise<BrandSupplierIndex> {
   const tree = await apiOfferTree();
-  const set = new Set<string>();
-  tree.forEach((year) => year.marken.forEach((m) => set.add(m.marke)));
-  return [...set].sort((a, b) => a.localeCompare(b));
+  const brandSet = new Set<string>();
+  const allSet = new Set<string>();
+  const byBrand: Record<string, Set<string>> = {};
+  tree.forEach((year) =>
+    year.marken.forEach((m) => {
+      brandSet.add(m.marke);
+      (byBrand[m.marke] ??= new Set<string>());
+      m.lieferanten.forEach((l) => {
+        byBrand[m.marke].add(l.lieferant);
+        allSet.add(l.lieferant);
+      });
+    })
+  );
+  const sort = (a: string, b: string) => a.localeCompare(b);
+  const suppliersByBrand: Record<string, string[]> = {};
+  for (const [brand, set] of Object.entries(byBrand)) {
+    suppliersByBrand[brand] = [...set].sort(sort);
+  }
+  return {
+    brands: [...brandSet].sort(sort),
+    allSuppliers: [...allSet].sort(sort),
+    suppliersByBrand,
+  };
 }
 
 // --- Archive --------------------------------------------------------------
@@ -266,6 +298,22 @@ export async function apiDownloadOfferFile(
     throw new Error(_extractDetail(err));
   }
   return resp.blob();
+}
+
+/** Fetch the server-rendered HTML preview of an archived file. */
+export async function apiPreviewOfferFile(
+  id: number,
+  which: "original" | "generated"
+): Promise<string> {
+  const resp = await fetch(`${API}/api/offers/${id}/preview/${which}`, {
+    headers: { ..._authHeader() },
+  });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.text();
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

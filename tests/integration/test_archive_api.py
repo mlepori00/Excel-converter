@@ -6,12 +6,25 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
+from offerten_converter.api.archive_routes import get_renderer
 from offerten_converter.api.auth import get_current_user
 from offerten_converter.api.server import app
+from offerten_converter.application.ports import SpreadsheetPreviewRenderer
 from offerten_converter.domain.entities import Offer, OfferLine, OfferStatus, User
 from offerten_converter.infrastructure.db.base import Base
 from offerten_converter.infrastructure.db.engine import get_db, make_engine
 from offerten_converter.infrastructure.sql_offer_repo import SqlOfferRepository
+
+
+class _FakeRenderer(SpreadsheetPreviewRenderer):
+    """Records calls and returns a deterministic fake HTML document."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def to_html(self, data: bytes, *, src_suffix: str) -> str:
+        self.calls += 1
+        return f"<html><body>fake {data.decode(errors='replace')}</body></html>"
 
 
 def _offer(*, jahr, marke, lieferant, status=OfferStatus.CREATED, lines=None):
@@ -56,11 +69,15 @@ def client(tmp_path):
         id=1, email="t@amp.ch", name="Tester", password_hash="x"
     )
     app.dependency_overrides[get_db] = _get_db
+    fake_renderer = _FakeRenderer()
+    app.state.fake_renderer = fake_renderer
+    app.dependency_overrides[get_renderer] = lambda: fake_renderer
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_renderer, None)
 
 
 def test_list_all(client):
@@ -135,3 +152,31 @@ def test_status_update_invalid(client):
 
 def test_status_update_404(client):
     assert client.patch("/api/offers/9999/status", json={"status": "versendet"}).status_code == 404
+
+
+def _nike_a_id(client):
+    return client.get("/api/offers?marke=Nike&lieferant=Distri A").json()[0]["id"]
+
+
+def test_preview_generated_renders_html(client):
+    offer_id = _nike_a_id(client)
+    resp = client.get(f"/api/offers/{offer_id}/preview/generated")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "fake gen-nike-a" in resp.text
+
+
+def test_preview_original_renders_html(client):
+    offer_id = _nike_a_id(client)
+    resp = client.get(f"/api/offers/{offer_id}/preview/original")
+    assert resp.status_code == 200
+    assert "fake orig-nike-a" in resp.text
+
+
+def test_preview_invalid_which_is_404(client):
+    offer_id = _nike_a_id(client)
+    assert client.get(f"/api/offers/{offer_id}/preview/quatsch").status_code == 404
+
+
+def test_preview_offer_not_found_is_404(client):
+    assert client.get("/api/offers/9999/preview/generated").status_code == 404

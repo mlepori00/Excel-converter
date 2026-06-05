@@ -1,14 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 
 import {
   apiDownloadOfferFile,
   apiGetOffer,
   apiListOffers,
   apiOfferTree,
+  apiPreviewOfferFile,
   apiSetOfferStatus,
   downloadBlob,
 } from "../api";
 import type { OfferDetail, OfferStatusValue, OfferSummary, TreeYear } from "../types";
+import { Icon } from "./Icon";
+
+type PreviewKind = "original" | "generated";
+type PreviewState = { html: string; title: string };
 
 const STATUS_LABELS: Record<OfferStatusValue, string> = {
   erstellt: "Erstellt",
@@ -45,6 +50,8 @@ export function ArchiveView() {
   const [expandedBrands, setExpandedBrands] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
 
   function refreshTree() {
     apiOfferTree().then(setTree).catch(() => undefined);
@@ -104,6 +111,29 @@ export function ArchiveView() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download fehlgeschlagen");
     }
+  }
+
+  async function openPreview(e: MouseEvent, o: OfferSummary, which: PreviewKind) {
+    e.stopPropagation();
+    const key = `${o.id}:${which}`;
+    setPreviewLoading(key);
+    setError("");
+    try {
+      const html = await apiPreviewOfferFile(o.id, which);
+      const title =
+        which === "original"
+          ? `Lieferanten-Offerte – ${o.lieferant}`
+          : `Unsere Offerte – ${o.marke}`;
+      setPreview({ html, title });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Vorschau fehlgeschlagen");
+    } finally {
+      setPreviewLoading(null);
+    }
+  }
+
+  function closePreview() {
+    setPreview(null);
   }
 
   const isAll = !filters.jahr && !filters.marke && !filters.lieferant;
@@ -206,6 +236,8 @@ export function ArchiveView() {
                 <th>Datum</th>
                 <th>Marke</th>
                 <th>Lieferant</th>
+                <th>Lieferanten-Offerte</th>
+                <th>Unsere Offerte</th>
                 <th>Ersteller</th>
                 <th>Status</th>
               </tr>
@@ -216,6 +248,28 @@ export function ArchiveView() {
                   <td>{fmtDate(o.created_at)}</td>
                   <td>{o.marke}</td>
                   <td>{o.lieferant}</td>
+                  <td>
+                    <button
+                      className="preview-btn"
+                      disabled={previewLoading === `${o.id}:original`}
+                      onClick={(e) => void openPreview(e, o, "original")}
+                      type="button"
+                    >
+                      <Icon name={previewLoading === `${o.id}:original` ? "loader" : "file"} size={15} />
+                      {previewLoading === `${o.id}:original` ? "Lädt …" : "Ansehen"}
+                    </button>
+                  </td>
+                  <td>
+                    <button
+                      className="preview-btn"
+                      disabled={previewLoading === `${o.id}:generated`}
+                      onClick={(e) => void openPreview(e, o, "generated")}
+                      type="button"
+                    >
+                      <Icon name={previewLoading === `${o.id}:generated` ? "loader" : "file"} size={15} />
+                      {previewLoading === `${o.id}:generated` ? "Lädt …" : "Ansehen"}
+                    </button>
+                  </td>
                   <td>{o.created_by_name}</td>
                   <td>
                     <span className={`status-badge status-${o.status}`}>
@@ -303,6 +357,25 @@ export function ArchiveView() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {preview && (
+        <div className="preview-overlay" onClick={closePreview}>
+          <div className="preview-box" onClick={(e) => e.stopPropagation()}>
+            <div className="preview-head">
+              <span className="preview-title">{preview.title}</span>
+              <button className="archive-close" onClick={closePreview} type="button">
+                ✕
+              </button>
+            </div>
+            <iframe
+              className="preview-frame"
+              sandbox=""
+              srcDoc={preview.html}
+              title={preview.title}
+            />
           </div>
         </div>
       )}

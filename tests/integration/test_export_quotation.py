@@ -5,6 +5,7 @@ import io
 import pandas as pd
 import pytest
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 from offerten_converter.infrastructure.excel_writer import _active_columns, build_excel
 
@@ -76,3 +77,45 @@ class TestBuildExcel:
             r for r in range(1, 30) if ws.cell(row=r, column=1).value == "TOTAL"
         )
         assert total_row == 8
+
+    def test_sell_price_columns_labelled_ek(self, sample_df):
+        # The offer is the customer's order, so the sell price is labelled "EK".
+        data = build_excel(sample_df, "Test", "T", "CHF")
+        wb = load_workbook(io.BytesIO(data))
+        ws = wb["Offerte"]
+        headers = {ws.cell(row=6, column=c).value for c in range(1, 50)}
+        assert "EK/Stk" in headers
+        assert "EK Total" in headers
+        assert "VK/Stk" not in headers
+        assert "VK Total" not in headers
+
+    def test_qty_validation_caps_at_available(self):
+        df = pd.DataFrame([
+            {"product_name": "A", "qty": None, "available_qty": 5,
+             "vk_unit_target": 10.0, "vk_target": None},
+            {"product_name": "B", "qty": None, "available_qty": 12,
+             "vk_unit_target": 20.0, "vk_target": None},
+        ])
+        data = build_excel(df, "Test", "T", "CHF")
+        wb = load_workbook(io.BytesIO(data))
+        ws = wb["Offerte"]
+        dvs = ws.data_validations.dataValidation
+        assert len(dvs) == 1
+        dv = dvs[0]
+        assert dv.type == "whole"
+        assert dv.operator == "between"
+        # Relative max reference anchored on the first guarded row.
+        assert dv.formula1 == "0"
+        avail_col = next(
+            get_column_letter(c)
+            for c in range(1, 50)
+            if ws.cell(row=6, column=c).value == "Max. verfügbar"
+        )
+        assert dv.formula2 == f"{avail_col}7"
+        qty_col = next(
+            get_column_letter(c)
+            for c in range(1, 50)
+            if ws.cell(row=6, column=c).value == "Bestellt"
+        )
+        assert f"{qty_col}7" in str(dv.sqref)
+        assert f"{qty_col}8" in str(dv.sqref)

@@ -10,6 +10,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # ── AMP Sport Corporate Colours ───────────────────────────────────────────────
 NAVY        = "1B2D6B"   # dark navy  (logo primary)
@@ -28,7 +29,9 @@ NO_BORDER   = Border()
 # __file__ = src/offerten_converter/infrastructure/excel_writer.py → 4 levels up = project root
 _ASSETS = Path(__file__).resolve().parent.parent.parent.parent / "assets"
 
-# EK/Stk and EK Total are never shown in customer-facing output.
+# AMP's own purchase price (fields ek_unit_target/ek_target) is never shown in
+# customer-facing output. The offer IS the customer's order, so from their point
+# of view the sell price is *their* purchase price → labelled "EK/Stk" / "EK Total".
 # Conditional columns are omitted when the entire column is empty.
 _BASE_COLUMNS = [
     ("Pos",           "pos"),
@@ -40,8 +43,8 @@ _BASE_COLUMNS = [
     ("Kategorie",     "category"),
     ("Bestellt",      "qty"),
     ("Max. verfügbar","available_qty"),
-    ("VK/Stk",        "vk_unit_target"),
-    ("VK Total",      "vk_target"),
+    ("EK/Stk",        "vk_unit_target"),
+    ("EK Total",      "vk_target"),
     ("Notizen",       "notes"),
     ("Zusatzinfos",   "extra_fields"),
 ]
@@ -375,6 +378,40 @@ def build_excel(
         vk_c.value         = f"=SUM({vk_letter}{sum_start}:{vk_letter}{sum_end})"
         vk_c.number_format = f'#,##0.00\\ "{target_currency}"'
         vk_c.alignment     = Alignment(horizontal="right", vertical="center")
+
+    # ── Order-quantity guard: Bestellt ≤ Max. verfügbar ───────────────────────
+    # The customer fills "Bestellt" in their copy; Excel rejects any value above
+    # the row's "Max. verfügbar". Only rows that carry a max figure are guarded.
+    if "available_qty" in col_map and len(df_reset) > 0:
+        qty_letter   = get_column_letter(col_map["qty"])
+        avail_letter = get_column_letter(col_map["available_qty"])
+        guarded_rows = []
+        for offset, (_, series) in enumerate(df_reset.iterrows()):
+            avail = series.get("available_qty")
+            if hasattr(avail, "item"):
+                avail = avail.item()
+            if isinstance(avail, (int, float)) and not pd.isna(avail) and avail > 0:
+                guarded_rows.append(DATA_START_ROW + 1 + offset)
+        if guarded_rows:
+            anchor = guarded_rows[0]  # relative formula base = first guarded cell
+            dv = DataValidation(
+                type="whole",
+                operator="between",
+                formula1="0",
+                formula2=f"{avail_letter}{anchor}",
+                allow_blank=True,
+                showErrorMessage=True,
+                showInputMessage=True,
+            )
+            dv.errorTitle   = "Menge zu hoch"
+            dv.error        = (
+                "Die bestellte Menge darf die maximal verfügbare Menge "
+                "nicht überschreiten."
+            )
+            dv.promptTitle  = "Bestellmenge"
+            dv.prompt       = "Höchstens die maximal verfügbare Menge eingeben."
+            dv.sqref = " ".join(f"{qty_letter}{r}" for r in guarded_rows)
+            ws.add_data_validation(dv)
 
     # ── Freeze, autofilter, column widths ─────────────────────────────────────
     ws.freeze_panes = ws.cell(row=DATA_START_ROW + 1, column=1)

@@ -150,6 +150,20 @@ class SqlOfferRepository(OfferRepository):
             return None
         return row.generated_file, row.generated_filename
 
+    # which -> (source-file column, filename column)
+    _FILE_COLUMNS = {
+        "original": ("original_file", "original_filename"),
+        "generated": ("generated_file", "generated_filename"),
+    }
+
+    def get_file(self, offer_id: int, which: str) -> tuple[bytes, str] | None:
+        """Return (bytes, filename) of the original or generated file, or None."""
+        file_col, name_col = self._FILE_COLUMNS[which]
+        row = self._s.get(OfferModel, offer_id)
+        if row is None:
+            return None
+        return getattr(row, file_col), getattr(row, name_col)
+
     def update_status(self, offer_id: int, status: OfferStatus) -> Offer | None:
         row = self._s.get(OfferModel, offer_id)
         if row is None:

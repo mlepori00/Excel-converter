@@ -1,13 +1,20 @@
+import { Combobox } from "./Combobox";
+import type { ResolveStatus } from "./Combobox";
+
 type Props = {
   supplierName: string;
   marke: string;
   brands: string[];
+  allSuppliers: string[];
+  suppliersByBrand: Record<string, string[]>;
   margin: number;
   targetCurrency: string;
   pricingMode: "margin" | "market";
   marketDiscount: number;
   onSupplierNameChange: (v: string) => void;
   onMarkeChange: (v: string) => void;
+  onMarkeStatusChange: (s: ResolveStatus) => void;
+  onSupplierStatusChange: (s: ResolveStatus) => void;
   onMarginChange: (v: number) => void;
   onCurrencyChange: (v: string) => void;
   onPricingModeChange: (v: "margin" | "market") => void;
@@ -18,44 +25,48 @@ export function SettingsCard({
   supplierName,
   marke,
   brands,
+  allSuppliers,
+  suppliersByBrand,
   margin,
   targetCurrency,
   pricingMode,
   marketDiscount,
   onSupplierNameChange,
   onMarkeChange,
+  onMarkeStatusChange,
+  onSupplierStatusChange,
   onMarginChange,
   onCurrencyChange,
   onPricingModeChange,
   onMarketDiscountChange,
 }: Props) {
+  // Suppliers already used with the chosen brand are suggested first.
+  const brandSuppliers = suppliersByBrand[marke.trim()] ?? [];
+
   return (
     <aside className="card settings-card">
       <p className="card-label">Offerte</p>
 
-      <label className="settings-field">
-        <span>Marke</span>
-        <input
-          list="brand-suggestions"
-          onChange={(e) => onMarkeChange(e.target.value)}
-          placeholder="z. B. Nike"
-          value={marke}
-        />
-        <datalist id="brand-suggestions">
-          {brands.map((b) => (
-            <option key={b} value={b} />
-          ))}
-        </datalist>
-      </label>
+      <Combobox
+        label="Marke"
+        value={marke}
+        onChange={onMarkeChange}
+        onStatusChange={onMarkeStatusChange}
+        options={brands}
+        placeholder="z. B. Nike"
+      />
 
-      <label className="settings-field">
-        <span>Lieferant</span>
-        <input
-          onChange={(e) => onSupplierNameChange(e.target.value)}
-          placeholder="Lieferantenname"
-          value={supplierName}
-        />
-      </label>
+      <Combobox
+        label="Lieferant"
+        value={supplierName}
+        onChange={onSupplierNameChange}
+        onStatusChange={onSupplierStatusChange}
+        options={allSuppliers}
+        priorityOptions={brandSuppliers}
+        priorityLabel={marke.trim() ? `Lieferanten von ${marke.trim()}` : undefined}
+        restLabel="Alle Lieferanten"
+        placeholder="Lieferantenname"
+      />
 
       <label className="settings-field">
         <span>Marge %</span>

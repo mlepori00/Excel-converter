@@ -52,8 +52,9 @@ ruff check src/ tests/            # Linting
 - **Ablage-Taxonomie:** Jahr → Marke → Lieferant (genau **eine Marke** pro Offerte; eine Marke kann mehrere Lieferanten haben). Kein Kundenfeld. Keine Migration von Altdaten.
 - **Status-Workflow:** Erstellt → Versendet → Bestellung erhalten → Abgeschlossen (kein „Entwurf", da nur bei Export gespeichert).
 - Tabellen: `offers` + `offer_line_items` (`OfferModel`/`OfferLineItemModel`). Datei-Blobs sind `deferred` (Listen/Detail laden sie nicht). `offer_line_items` hat bereits leere `provenance`-Spalten für den Round-Trip (Phase 3).
-- Endpunkte (`api/archive_routes.py`, auth-geschützt): `GET /api/offers` (Filter `jahr/marke/lieferant/status/q`), `GET /api/offers/tree`, `GET /api/offers/{id}`, `PATCH /api/offers/{id}/status`, `GET /api/offers/{id}/original|generated`.
-- Frontend: Ansicht „Archiv" mit Jahr→Marke→Lieferant-Navigation, Suche, Detail, Status, Downloads. Wieder-Bearbeiten/Round-Trip folgt in Phase 3.
+- **Vorschau:** `GET /api/offers/{id}/preview/{original|generated}` rendert die Excel serverseitig mit **openpyxl** zu einer formatierten HTML-Tabelle (`infrastructure/excel_html_renderer.py`, Port `SpreadsheetPreviewRenderer`) und liefert ein eigenständiges HTML-Dokument (`text/html`). Keine externe Render-Engine, plattformunabhängig; Zellwerte werden escaped (kein XSS), `.xls`/Fehlerfälle fallen auf eine einfache pandas-Tabelle zurück.
+- Endpunkte (`api/archive_routes.py`, auth-geschützt): `GET /api/offers` (Filter `jahr/marke/lieferant/status/q`), `GET /api/offers/tree`, `GET /api/offers/{id}`, `PATCH /api/offers/{id}/status`, `GET /api/offers/{id}/original|generated`, `GET /api/offers/{id}/preview/{which}`.
+- Frontend: Ansicht „Archiv" mit Jahr→Marke→Lieferant-Navigation, Suche, Detail, Status, Downloads sowie Tabellen-Spalten „Lieferanten-Offerte"/„Unsere Offerte" mit Gross-Vorschau (HTML in sandboxed `<iframe srcDoc>`). Wieder-Bearbeiten/Round-Trip folgt in Phase 3.
 
 ## Konventionen
 

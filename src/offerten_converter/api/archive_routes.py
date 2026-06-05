@@ -6,23 +6,32 @@ Mounted under /api with the get_current_user guard (see server.py).
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from offerten_converter.application.ports import SpreadsheetPreviewRenderer
 from offerten_converter.domain.entities import Offer, OfferStatus
 from offerten_converter.infrastructure.db.engine import get_db
+from offerten_converter.infrastructure.excel_html_renderer import ExcelHtmlRenderer
 from offerten_converter.infrastructure.sql_offer_repo import SqlOfferRepository
 
 router = APIRouter()
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+_renderer = ExcelHtmlRenderer()
+
 
 def _repo(db: Session = Depends(get_db)) -> SqlOfferRepository:
     return SqlOfferRepository(db)
+
+
+def get_renderer() -> SpreadsheetPreviewRenderer:
+    return _renderer
 
 
 # --- schemas --------------------------------------------------------------
@@ -234,3 +243,30 @@ def download_generated(offer_id: int, repo: SqlOfferRepository = Depends(_repo))
         media_type=_XLSX_MIME,
         headers={"Content-Disposition": f'attachment; filename="{filename or "offerte.xlsx"}"'},
     )
+
+
+@router.get("/offers/{offer_id}/preview/{which}")
+def preview_offer(
+    offer_id: int,
+    which: str,
+    repo: SqlOfferRepository = Depends(_repo),
+    renderer: SpreadsheetPreviewRenderer = Depends(get_renderer),
+) -> Response:
+    """Return an HTML rendering of the original or generated file for previewing."""
+    if which not in ("original", "generated"):
+        raise HTTPException(404, "Unbekannte Vorschau")
+
+    src = repo.get_file(offer_id, which)
+    if src is None:
+        raise HTTPException(404, "Offerte nicht gefunden")
+    data, filename = src
+    if not data:
+        raise HTTPException(404, "Keine Datei vorhanden")
+
+    suffix = Path(filename or "").suffix or ".xlsx"
+    try:
+        html = renderer.to_html(data, src_suffix=suffix)
+    except Exception as exc:  # rendering failure -> surface as 500
+        raise HTTPException(500, "Vorschau konnte nicht erzeugt werden") from exc
+
+    return Response(content=html, media_type="text/html; charset=utf-8")

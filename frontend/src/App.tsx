@@ -11,7 +11,7 @@ import { OverviewScreen } from "./components/OverviewScreen";
 import { ProductTable } from "./components/ProductTable";
 import { SettingsCard } from "./components/SettingsCard";
 import {
-  apiBrands,
+  apiBrandSupplierIndex,
   apiExport,
   apiExtract,
   apiMapColumns,
@@ -22,6 +22,7 @@ import {
   API,
   _authHeader,
 } from "./api";
+import type { ResolveStatus } from "./components/Combobox";
 import type {
   AuthUser,
   ExportSummary,
@@ -45,6 +46,8 @@ export default function App({ user, onLogout }: AppProps) {
   const [stage, setStage] = useState<Stage>("empty");
   const [error, setError] = useState("");
   const [showChangePw, setShowChangePw] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState<"create" | "archive">("create");
 
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
@@ -54,6 +57,10 @@ export default function App({ user, onLogout }: AppProps) {
   const [supplierName, setSupplierName] = useState("");
   const [marke, setMarke] = useState("");
   const [brands, setBrands] = useState<string[]>([]);
+  const [allSuppliers, setAllSuppliers] = useState<string[]>([]);
+  const [suppliersByBrand, setSuppliersByBrand] = useState<Record<string, string[]>>({});
+  const [markeStatus, setMarkeStatus] = useState<ResolveStatus>("empty");
+  const [supplierStatus, setSupplierStatus] = useState<ResolveStatus>("empty");
   const [margin, setMargin] = useState(40);
   const [targetCurrency, setTargetCurrency] = useState("CHF");
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
@@ -83,12 +90,40 @@ export default function App({ user, onLogout }: AppProps) {
     stage === "ready" &&
     supplierName.trim() !== "" &&
     marke.trim() !== "" &&
+    markeStatus !== "unconfirmed" &&
+    supplierStatus !== "unconfirmed" &&
     products.length > 0;
 
-  // Load existing brand names for the create-flow autocomplete.
+  // Load the brand/supplier suggestion index for the create flow.
+  function loadBrandSupplierIndex() {
+    apiBrandSupplierIndex()
+      .then((idx) => {
+        setBrands(idx.brands);
+        setAllSuppliers(idx.allSuppliers);
+        setSuppliersByBrand(idx.suppliersByBrand);
+      })
+      .catch(() => undefined);
+  }
+  useEffect(loadBrandSupplierIndex, []);
+
+  // Close the user menu on outside click or Escape.
   useEffect(() => {
-    apiBrands().then(setBrands).catch(() => setBrands([]));
-  }, []);
+    if (!menuOpen) return;
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   const filteredProducts = searchQuery.trim()
     ? products.filter((p) => {
@@ -317,8 +352,8 @@ export default function App({ user, onLogout }: AppProps) {
         filename,
         archived: offerId !== null,
       });
-      // Refresh brand suggestions so a newly used brand appears next time.
-      apiBrands().then(setBrands).catch(() => undefined);
+      // Refresh suggestions so a newly used brand/supplier appears next time.
+      loadBrandSupplierIndex();
       setStage("exported");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Export-Fehler");
@@ -489,18 +524,43 @@ export default function App({ user, onLogout }: AppProps) {
             Archiv
           </button>
         </nav>
-        <div className="user-menu">
-          <span className="user-name">{user.name}</span>
+        <div className="user-menu" ref={menuRef}>
           <button
             type="button"
-            className="logout-btn"
-            onClick={() => setShowChangePw(true)}
+            className="user-menu__trigger"
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
           >
-            Passwort
+            <span className="user-name">{user.name}</span>
+            <span className={menuOpen ? "user-menu__caret open" : "user-menu__caret"}>▾</span>
           </button>
-          <button type="button" className="logout-btn" onClick={onLogout}>
-            Abmelden
-          </button>
+          {menuOpen && (
+            <div className="user-menu__dropdown" role="menu">
+              <button
+                type="button"
+                className="user-menu__item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setShowChangePw(true);
+                }}
+              >
+                Passwort ändern
+              </button>
+              <button
+                type="button"
+                className="user-menu__item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onLogout();
+                }}
+              >
+                Abmelden
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -587,6 +647,7 @@ export default function App({ user, onLogout }: AppProps) {
                 searchQuery={searchQuery}
               />
               <SettingsCard
+                allSuppliers={allSuppliers}
                 brands={brands}
                 margin={margin}
                 marke={marke}
@@ -595,9 +656,12 @@ export default function App({ user, onLogout }: AppProps) {
                 onMarginChange={setMargin}
                 onMarketDiscountChange={setMarketDiscount}
                 onMarkeChange={setMarke}
+                onMarkeStatusChange={setMarkeStatus}
                 onPricingModeChange={setPricingMode}
                 onSupplierNameChange={setSupplierName}
+                onSupplierStatusChange={setSupplierStatus}
                 pricingMode={pricingMode}
+                suppliersByBrand={suppliersByBrand}
                 supplierName={supplierName}
                 targetCurrency={targetCurrency}
               />
