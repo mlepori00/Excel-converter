@@ -1,10 +1,13 @@
 type Props = {
   supplierName: string;
+  marke: string;
+  brands: string[];
   margin: number;
   targetCurrency: string;
   pricingMode: "margin" | "market";
   marketDiscount: number;
   onSupplierNameChange: (v: string) => void;
+  onMarkeChange: (v: string) => void;
   onMarginChange: (v: number) => void;
   onCurrencyChange: (v: string) => void;
   onPricingModeChange: (v: "margin" | "market") => void;
@@ -13,11 +16,14 @@ type Props = {
 
 export function SettingsCard({
   supplierName,
+  marke,
+  brands,
   margin,
   targetCurrency,
   pricingMode,
   marketDiscount,
   onSupplierNameChange,
+  onMarkeChange,
   onMarginChange,
   onCurrencyChange,
   onPricingModeChange,
@@ -29,6 +35,21 @@ export function SettingsCard({
 
       <label className="settings-field">
         <span>Marke</span>
+        <input
+          list="brand-suggestions"
+          onChange={(e) => onMarkeChange(e.target.value)}
+          placeholder="z. B. Nike"
+          value={marke}
+        />
+        <datalist id="brand-suggestions">
+          {brands.map((b) => (
+            <option key={b} value={b} />
+          ))}
+        </datalist>
+      </label>
+
+      <label className="settings-field">
+        <span>Lieferant</span>
         <input
           onChange={(e) => onSupplierNameChange(e.target.value)}
           placeholder="Lieferantenname"

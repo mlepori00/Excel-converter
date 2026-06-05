@@ -135,8 +135,9 @@ export async function apiExport(
   products: ProductRow[],
   edits: Record<number, RowEdit>,
   marketPrices: Record<string, number>,
-  createdBy: string
-): Promise<Blob> {
+  createdBy: string,
+  marke: string
+): Promise<{ blob: Blob; offerId: number | null }> {
   const rows = products.map((p) => {
     const edit = edits[p.row_id] ?? { ordered_qty: null, vk_manual: null, margin_pct: defaultMargin };
     return {
@@ -164,6 +165,7 @@ export async function apiExport(
     body: JSON.stringify({
       file_id: fileId,
       supplier_name: supplierName,
+      marke,
       created_by: createdBy,
       target_currency: targetCurrency,
       valid_days: 30,
@@ -176,7 +178,22 @@ export async function apiExport(
     const err = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(_extractDetail(err));
   }
-  return resp.blob();
+  const offerIdHeader = resp.headers.get("X-Offer-Id");
+  const blob = await resp.blob();
+  return { blob, offerId: offerIdHeader ? Number(offerIdHeader) : null };
+}
+
+/** Distinct brand names from existing offers (for create-flow autocomplete). */
+export async function apiBrands(): Promise<string[]> {
+  const resp = await fetch(`${API}/api/offers/tree`, { headers: { ..._authHeader() } });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    return [];
+  }
+  const tree = (await resp.json()) as Array<{ marken: Array<{ marke: string }> }>;
+  const set = new Set<string>();
+  tree.forEach((year) => year.marken.forEach((m) => set.add(m.marke)));
+  return [...set].sort((a, b) => a.localeCompare(b));
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

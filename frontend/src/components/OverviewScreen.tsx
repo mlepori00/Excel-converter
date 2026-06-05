@@ -20,6 +20,10 @@ export function OverviewScreen({ summary, onNewOffer, onBack }: Props) {
 
         <dl className="overview-details">
           <div>
+            <dt>Marke</dt>
+            <dd>{summary.marke}</dd>
+          </div>
+          <div>
             <dt>Lieferant</dt>
             <dd>{summary.supplierName}</dd>
           </div>
@@ -36,6 +40,12 @@ export function OverviewScreen({ summary, onNewOffer, onBack }: Props) {
             <dd className="overview-filename">{summary.filename}</dd>
           </div>
         </dl>
+
+        <p className={summary.archived ? "overview-archived" : "overview-archived warn"}>
+          {summary.archived
+            ? "✓ Im Archiv gespeichert"
+            : "⚠ Konnte nicht im Archiv gespeichert werden"}
+        </p>
 
         <div className="overview-actions">
           <button className="overview-btn-primary" onClick={onNewOffer} type="button">

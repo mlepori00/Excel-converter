@@ -16,9 +16,11 @@ export type Stage =
 
 export type ExportSummary = {
   supplierName: string;
+  marke: string;
   articleCount: number;
   currency: string;
   filename: string;
+  archived: boolean;
 };
 
 export type ProductRow = {

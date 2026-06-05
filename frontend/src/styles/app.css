@@ -1503,3 +1503,11 @@ td:has(.qty-input) { background: #f0f7ff !important; }
   background: rgba(0, 16, 64, 0.55);
   padding: 24px;
 }
+
+.overview-archived {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--green);
+}
+.overview-archived.warn { color: var(--amber); }

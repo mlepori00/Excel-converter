@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
 import { ExportFab } from "./components/ExportFab";
@@ -10,6 +10,7 @@ import { OverviewScreen } from "./components/OverviewScreen";
 import { ProductTable } from "./components/ProductTable";
 import { SettingsCard } from "./components/SettingsCard";
 import {
+  apiBrands,
   apiExport,
   apiExtract,
   apiMapColumns,
@@ -49,6 +50,8 @@ export default function App({ user, onLogout }: AppProps) {
   const [edits, setEdits] = useState<Record<number, RowEdit>>({});
 
   const [supplierName, setSupplierName] = useState("");
+  const [marke, setMarke] = useState("");
+  const [brands, setBrands] = useState<string[]>([]);
   const [margin, setMargin] = useState(40);
   const [targetCurrency, setTargetCurrency] = useState("CHF");
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
@@ -74,7 +77,16 @@ export default function App({ user, onLogout }: AppProps) {
 
   const hasFile = parseResult !== null;
   const isLoading = stage === "parsing" || stage === "extracting" || stage === "exporting";
-  const canExport = stage === "ready" && supplierName.trim() !== "" && products.length > 0;
+  const canExport =
+    stage === "ready" &&
+    supplierName.trim() !== "" &&
+    marke.trim() !== "" &&
+    products.length > 0;
+
+  // Load existing brand names for the create-flow autocomplete.
+  useEffect(() => {
+    apiBrands().then(setBrands).catch(() => setBrands([]));
+  }, []);
 
   const filteredProducts = searchQuery.trim()
     ? products.filter((p) => {
@@ -281,7 +293,7 @@ export default function App({ user, onLogout }: AppProps) {
         effectiveEdits = { ...edits, ...overrides };
       }
 
-      const blob = await apiExport(
+      const { blob, offerId } = await apiExport(
         parseResult.file_id,
         supplierName.trim(),
         targetCurrency,
@@ -289,17 +301,22 @@ export default function App({ user, onLogout }: AppProps) {
         filteredProducts,
         effectiveEdits,
         marketPrices,
-        user.name
+        user.name,
+        marke.trim()
       );
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const filename = `Offerte_${supplierName.trim().replace(/\s+/g, "_")}_${today}.xlsx`;
       downloadBlob(blob, filename);
       setExportSummary({
         supplierName: supplierName.trim(),
+        marke: marke.trim(),
         articleCount: filteredProducts.length,
         currency: targetCurrency,
         filename,
+        archived: offerId !== null,
       });
+      // Refresh brand suggestions so a newly used brand appears next time.
+      apiBrands().then(setBrands).catch(() => undefined);
       setStage("exported");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Export-Fehler");
@@ -413,6 +430,7 @@ export default function App({ user, onLogout }: AppProps) {
     setProducts([]);
     setEdits({});
     setSupplierName("");
+    setMarke("");
     setError("");
     setMarketPrices({});
     setScrapingStatus("");
@@ -549,11 +567,14 @@ export default function App({ user, onLogout }: AppProps) {
                 searchQuery={searchQuery}
               />
               <SettingsCard
+                brands={brands}
                 margin={margin}
+                marke={marke}
                 marketDiscount={marketDiscount}
                 onCurrencyChange={setTargetCurrency}
                 onMarginChange={setMargin}
                 onMarketDiscountChange={setMarketDiscount}
+                onMarkeChange={setMarke}
                 onPricingModeChange={setPricingMode}
                 onSupplierNameChange={setSupplierName}
                 pricingMode={pricingMode}
