@@ -11,11 +11,13 @@ import os
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from offerten_converter.api import file_store
+from offerten_converter.api.auth import get_current_user
 from offerten_converter.api.mappers import (
     dataframe_to_product_rows,
 )
@@ -24,6 +26,7 @@ from offerten_converter.application.export_quotation import export_to_excel
 from offerten_converter.application.extract_products import extract_line_items
 from offerten_converter.application.manage_profiles import profile_to_hints
 from offerten_converter.application.sanitize_data import sanitize_dataframe
+from offerten_converter.domain.entities import Offer, OfferLine, OfferStatus, User
 from offerten_converter.domain.pricing import DEFAULT_RATES
 from offerten_converter.infrastructure import extraction_cache
 from offerten_converter.infrastructure.ai_extractors import get_call_fn
@@ -32,6 +35,7 @@ from offerten_converter.infrastructure.column_mapper import (
     estimate_cost_chf,
     map_columns,
 )
+from offerten_converter.infrastructure.db.engine import get_db
 from offerten_converter.infrastructure.excel_reader import (
     get_recommended_sheet_name,
     get_sheet_names,
@@ -39,6 +43,7 @@ from offerten_converter.infrastructure.excel_reader import (
 )
 from offerten_converter.infrastructure.excel_writer import build_excel
 from offerten_converter.infrastructure.file_profile_repo import FileProfileRepository
+from offerten_converter.infrastructure.sql_offer_repo import SqlOfferRepository
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -127,6 +132,7 @@ class ExportRowIn(BaseModel):
 class ExportRequest(BaseModel):
     file_id: str
     supplier_name: str
+    marke: str = ""
     created_by: str = "AMP Sport GmbH"
     target_currency: str = "CHF"
     valid_days: int = 30
@@ -479,11 +485,64 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
     )
 
 
+def _to_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _offer_lines_from_df(df: pd.DataFrame) -> list[OfferLine]:
+    """Map an enriched (priced) DataFrame to archived OfferLine entities."""
+    records = df.where(pd.notna(df), None).to_dict("records")
+    lines: list[OfferLine] = []
+    for pos, rec in enumerate(records):
+        qty = rec.get("ordered_qty")
+        if qty is None:
+            qty = rec.get("qty")
+        lines.append(
+            OfferLine(
+                position=pos,
+                sku=rec.get("sku"),
+                ean=rec.get("ean"),
+                product_name=rec.get("product_name"),
+                size=rec.get("size"),
+                color=rec.get("color"),
+                category=rec.get("category"),
+                unit_price=_to_float(rec.get("unit_price")),
+                currency=rec.get("currency"),
+                ordered_qty=_to_int(qty),
+                available_qty=_to_int(rec.get("available_qty")),
+                discount_pct=_to_float(rec.get("discount_pct")),
+                vk_unit=_to_float(rec.get("vk_unit_target")),
+                vk_total=_to_float(rec.get("vk_target")),
+                margin_actual=_to_float(rec.get("margin_actual")),
+                notes=rec.get("notes"),
+            )
+        )
+    return lines
+
+
 @router.post("/offer/export")
-async def export_offer(body: ExportRequest) -> Response:
+async def export_offer(
+    body: ExportRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
     """
-    Apply per-row pricing and generate the AMP reseller Excel.
-    Returns the .xlsx file as a binary download.
+    Apply per-row pricing and generate the AMP reseller Excel, archive the
+    offer, and return the .xlsx file as a binary download.
     """
     if not body.rows:
         raise HTTPException(400, "Keine Positionen übergeben.")
@@ -519,11 +578,43 @@ async def export_offer(body: ExportRequest) -> Response:
         raise HTTPException(500, f"Export-Fehler: {exc}") from exc
 
     from datetime import date
-    filename = f"Offerte_{body.supplier_name.replace(' ', '_')}_{date.today():%Y%m%d}.xlsx"
+    today = date.today()
+    filename = f"Offerte_{body.supplier_name.replace(' ', '_')}_{today:%Y%m%d}.xlsx"
+
+    # Archive the offer (auto-save). Never let an archive failure block the
+    # download the user just generated.
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    try:
+        stored = file_store.get(body.file_id)
+        if stored is None:
+            logger.warning("Original file %s not in store; archiving without it", body.file_id)
+            original_bytes, original_filename = b"", ""
+        else:
+            original_bytes, original_filename = stored
+
+        offer = Offer(
+            jahr=today.year,
+            marke=(body.marke.strip() or "Unbekannt"),
+            lieferant=body.supplier_name.strip(),
+            created_by_name=user.name,
+            created_by_user_id=user.id,
+            target_currency=body.target_currency,
+            default_margin=body.default_margin_pct,
+            original_filename=original_filename,
+            generated_filename=filename,
+            status=OfferStatus.CREATED,
+            line_items=_offer_lines_from_df(enriched_df),
+        )
+        saved = SqlOfferRepository(db).create(offer, original_bytes, excel_bytes)
+        headers["X-Offer-Id"] = str(saved.id)
+        headers["Access-Control-Expose-Headers"] = "X-Offer-Id"
+    except Exception:
+        logger.exception("Offerte konnte nicht archiviert werden")
+
     return Response(
         content=excel_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=headers,
     )
 
 
