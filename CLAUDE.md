@@ -6,12 +6,12 @@ Web-App (FastAPI + React) für Sportartikel-Distributoren: Lieferanten-Excel-Off
 
 ```
 src/offerten_converter/
-  domain/          → Entities (LineItem, SupplierProfile), Pricing-Logik (pure functions)
+  domain/          → Entities (LineItem, SupplierProfile, User, Offer/OfferLine), Pricing-Logik (pure functions)
   application/     → Use Cases, Ports (abstrakte Interfaces)
   infrastructure/  → Claude/OpenRouter Extractors, Excel Reader/Writer, Profile Repo,
                      Column Mapper, Market Price Scraper, ECB Rates, Extraction Cache,
-                     DB (SQLAlchemy engine/models/repos), Security (bcrypt + JWT)
-  api/             → FastAPI Server (routes, auth, schemas, mappers, file_store) + Entry Point
+                     DB (SQLAlchemy engine/models/repos: User + Offer), Security (bcrypt + JWT)
+  api/             → FastAPI Server (routes, auth, archive_routes, schemas, mappers, file_store) + Entry Point
 frontend/          → React + Vite + TypeScript UI (kompiliert nach frontend/dist)
 ```
 
@@ -45,6 +45,15 @@ ruff check src/ tests/            # Linting
 - Benutzer werden via `admin`-CLI angelegt (kein Self-Sign-up). `create-user` ohne `--password` erzeugt ein temporäres Passwort; der Nutzer muss es beim ersten Login ändern (`--no-force-change` für das eigene Konto).
 - DB: SQLite via SQLAlchemy, Datei unter `./data/offerten.db` (über `DATABASE_URL` überschreibbar; in Docker als Volume gemountet). Schema-Erweiterungen vorerst als additive Mini-Migration in `init_db()` (Alembic geplant ab Phase 2).
 - Env-Vars (siehe `.env.example`): `ANTHROPIC_API_KEY`, `SECRET_KEY` (JWT-Signatur, in Prod Pflicht), optional `DATABASE_URL`, `ACCESS_TOKEN_TTL_MINUTES`.
+
+## Archiv
+
+- Jede Offerte wird **automatisch beim Export** gespeichert (`POST /api/offer/export` → `X-Offer-Id`-Header). Gespeichert werden: Original-Lieferantendatei + erzeugte AMP-Excel (als Blob in der DB), bepreiste Positionen und Metadaten.
+- **Ablage-Taxonomie:** Jahr → Marke → Lieferant (genau **eine Marke** pro Offerte; eine Marke kann mehrere Lieferanten haben). Kein Kundenfeld. Keine Migration von Altdaten.
+- **Status-Workflow:** Erstellt → Versendet → Bestellung erhalten → Abgeschlossen (kein „Entwurf", da nur bei Export gespeichert).
+- Tabellen: `offers` + `offer_line_items` (`OfferModel`/`OfferLineItemModel`). Datei-Blobs sind `deferred` (Listen/Detail laden sie nicht). `offer_line_items` hat bereits leere `provenance`-Spalten für den Round-Trip (Phase 3).
+- Endpunkte (`api/archive_routes.py`, auth-geschützt): `GET /api/offers` (Filter `jahr/marke/lieferant/status/q`), `GET /api/offers/tree`, `GET /api/offers/{id}`, `PATCH /api/offers/{id}/status`, `GET /api/offers/{id}/original|generated`.
+- Frontend: Ansicht „Archiv" mit Jahr→Marke→Lieferant-Navigation, Suche, Detail, Status, Downloads. Wieder-Bearbeiten/Round-Trip folgt in Phase 3.
 
 ## Konventionen
 
