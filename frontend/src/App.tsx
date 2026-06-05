@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArchiveView } from "./components/ArchiveView";
 import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
 import { ExportFab } from "./components/ExportFab";
+import { FlowSteps } from "./components/FlowSteps";
 import { HeaderCard } from "./components/HeaderCard";
 import { ImportCard } from "./components/ImportCard";
 import { InfoCard } from "./components/InfoCard";
@@ -93,6 +94,14 @@ export default function App({ user, onLogout }: AppProps) {
     markeStatus !== "unconfirmed" &&
     supplierStatus !== "unconfirmed" &&
     products.length > 0;
+
+  // Guided-flow step: first action the user still needs to take.
+  const offerComplete =
+    marke.trim() !== "" &&
+    supplierName.trim() !== "" &&
+    markeStatus !== "unconfirmed" &&
+    supplierStatus !== "unconfirmed";
+  const currentStep = !hasFile ? 1 : products.length === 0 ? 2 : !offerComplete ? 3 : 4;
 
   // Load the brand/supplier suggestion index for the create flow.
   function loadBrandSupplierIndex() {
@@ -582,17 +591,18 @@ export default function App({ user, onLogout }: AppProps) {
         />
       ) : (
         <>
-          <section className="top-grid">
-            <ImportCard
-                hasFile={hasFile}
-                inputRef={inputRef}
-                isLoading={isLoading}
-                onFile={(f) => void handleFile(f)}
-                onReset={handleReset}
-                parseResult={parseResult}
-                stage={stage}
-            />
-            <div className="action-panel">
+          <FlowSteps current={currentStep} />
+          <section className={hasFile ? "work-top work-top--offer" : "work-top"}>
+            <div className="setup-grid">
+              <ImportCard
+                  hasFile={hasFile}
+                  inputRef={inputRef}
+                  isLoading={isLoading}
+                  onFile={(f) => void handleFile(f)}
+                  onReset={handleReset}
+                  parseResult={parseResult}
+                  stage={stage}
+              />
               <InfoCard
                 columnMappingResult={columnMappingResult}
                 error={error}
@@ -607,45 +617,28 @@ export default function App({ user, onLogout }: AppProps) {
                 parseResult={parseResult}
                 products={products}
               />
-              {products.length > 0 && (
-                <MarketCard
-                  hasFile={hasFile}
-                  isSampling={isSampling}
-                  marketPrices={marketPrices}
-                  onSample={() => void handleSample()}
-                  onScrapeAll={handleScrapeAll}
-                  onStop={handleStopScrape}
-                  products={products}
-                  sampleResult={sampleResult}
-                  scrapingProgress={scrapingProgress}
-                  scrapingStatus={scrapingStatus}
-                />
-              )}
-            </div>
-            <HeaderCard
-              columnMappingResult={columnMappingResult}
-              isLoading={isLoading}
-              isMappingColumns={isMappingColumns}
-              mappingError={mappingError}
-              onMapColumns={() => void handleMapColumns()}
-              parseResult={parseResult}
-            />
-          </section>
-
-          {hasFile && (
-            <section className="bottom-grid">
-              <ProductTable
-                edits={edits}
-                filteredProducts={filteredProducts}
-                margin={margin}
-                marketDiscount={marketDiscount}
-                marketPrices={marketPrices}
-                onEdit={setEdit}
-                onSearchChange={setSearchQuery}
-                pricingMode={pricingMode}
-                products={products}
-                searchQuery={searchQuery}
+              <HeaderCard
+                columnMappingResult={columnMappingResult}
+                isLoading={isLoading}
+                isMappingColumns={isMappingColumns}
+                mappingError={mappingError}
+                onMapColumns={() => void handleMapColumns()}
+                parseResult={parseResult}
               />
+              <MarketCard
+                hasFile={hasFile}
+                isSampling={isSampling}
+                marketPrices={marketPrices}
+                onSample={() => void handleSample()}
+                onScrapeAll={handleScrapeAll}
+                onStop={handleStopScrape}
+                products={products}
+                sampleResult={sampleResult}
+                scrapingProgress={scrapingProgress}
+                scrapingStatus={scrapingStatus}
+              />
+            </div>
+            {hasFile && (
               <SettingsCard
                 allSuppliers={allSuppliers}
                 brands={brands}
@@ -664,6 +657,23 @@ export default function App({ user, onLogout }: AppProps) {
                 suppliersByBrand={suppliersByBrand}
                 supplierName={supplierName}
                 targetCurrency={targetCurrency}
+              />
+            )}
+          </section>
+
+          {hasFile && (
+            <section className="table-section">
+              <ProductTable
+                edits={edits}
+                filteredProducts={filteredProducts}
+                margin={margin}
+                marketDiscount={marketDiscount}
+                marketPrices={marketPrices}
+                onEdit={setEdit}
+                onSearchChange={setSearchQuery}
+                pricingMode={pricingMode}
+                products={products}
+                searchQuery={searchQuery}
               />
             </section>
           )}

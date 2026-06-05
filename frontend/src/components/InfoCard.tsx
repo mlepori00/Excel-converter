@@ -70,66 +70,51 @@ export function InfoCard({
   const showCache = parseResult?.extraction_mode === "cache";
 
   return (
-    <>
-      {/* ── Karte 1: Datei Info ── */}
-      <div className="card info-card">
-        <p className="card-label">Datei Info</p>
-        <div className="stat-grid">
-          <div>
-            <span>Positionen</span>
-            <strong>
-              {products.length > 0
-                ? products.length
-                : parseResult
-                ? parseResult.row_count
-                : "—"}
-            </strong>
-          </div>
-          <div>
-            <span>Extraktion</span>
-            <strong>{extractionLabel}</strong>
-          </div>
+    <div className="card extraction-card">
+      <p className="card-label">Datei &amp; Extraktion</p>
+
+      <div className="stat-grid">
+        <div>
+          <span>Positionen</span>
+          <strong>
+            {products.length > 0
+              ? products.length
+              : parseResult
+              ? parseResult.row_count
+              : "—"}
+          </strong>
         </div>
-        {(error || mappingError) && (
-          <p className="parse-error">{error || mappingError}</p>
-        )}
+        <div>
+          <span>Extraktion</span>
+          <strong>{extractionLabel}</strong>
+        </div>
       </div>
 
-      {/* ── Karte 2: KI Extraktion ── */}
+      {(error || mappingError) && <p className="parse-error">{error || mappingError}</p>}
+
       {parseResult && showExtractBtn && (
-        <div className="card action-card">
-          <p className="card-label">KI Extraktion</p>
-          <div className="action-row">
-            <button
-              className="action-btn action-btn--primary"
-              disabled={isBusy}
-              onClick={needsAiExtraction ? onExtract : onForceExtract}
-              type="button"
-            >
-              {isLoading ? "Extrahiert …" : "Mit Claude extrahieren"}
-            </button>
-            {parseResult.api_cost_estimate_chf != null && (
-              <span className="action-cost">
-                ~ CHF {parseResult.api_cost_estimate_chf.toFixed(2)}
-              </span>
-            )}
-          </div>
+        <div className="action-row">
+          <button
+            className="action-btn action-btn--primary"
+            disabled={isBusy}
+            onClick={needsAiExtraction ? onExtract : onForceExtract}
+            type="button"
+          >
+            {isLoading ? "Extrahiert …" : "Mit Claude extrahieren"}
+          </button>
+          {parseResult.api_cost_estimate_chf != null && (
+            <span className="action-cost">
+              ~ CHF {parseResult.api_cost_estimate_chf.toFixed(2)}
+            </span>
+          )}
         </div>
       )}
 
-      {/* ── Karte 4: Cache ── */}
       {showCache && !isBusy && (
-        <div className="card action-card">
-          <p className="card-label">Cache</p>
-          <button
-            className="action-btn"
-            onClick={onReparse}
-            type="button"
-          >
-            Cache ignorieren &amp; neu laden
-          </button>
-        </div>
+        <button className="reparse-button" onClick={onReparse} type="button">
+          Cache ignorieren &amp; neu laden
+        </button>
       )}
-    </>
+    </div>
   );
 }

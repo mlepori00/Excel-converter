@@ -31,38 +31,27 @@ export function HeaderCard({
 
       {r && (
         <div className="hc-breakdown">
+          <div className="hc-summary">
+            <strong>{r.columns_mapped}</strong>
+            <span>von {r.columns_total} Spalten zugewiesen</span>
+          </div>
 
-          <div className="hc-section">
-            <p className="hc-section__title hc-section__title--ok">
-              {r.columns_mapped}/{r.columns_total} Spalten erkannt
-            </p>
-            <div className="mapping-pills">
-              {Object.entries(r.mapped_fields).map(([canonical, original]) => (
-                <span className="mapping-pill" key={canonical}>
-                  <span className="mapping-pill__orig">{original}</span>
-                  <span className="mapping-pill__arrow">→</span>
-                  <span className="mapping-pill__canon">{canonical}</span>
-                </span>
-              ))}
-            </div>
+          <div className="hc-map">
+            {Object.entries(r.mapped_fields).map(([canonical, original]) => (
+              <div className="hc-map-row" key={canonical}>
+                <span className="hc-map-src" title={original}>{original}</span>
+                <span className="hc-map-arrow">→</span>
+                <span className="hc-map-dst">{canonical}</span>
+              </div>
+            ))}
           </div>
 
           {r.unmapped_columns.length > 0 && (
-            <div className="hc-section">
-              <p className="hc-section__title hc-section__title--neutral">
-                {r.unmapped_columns.length}/{r.columns_total} nicht zugewiesen
-              </p>
-              <div className="unmapped-pills">
-                {r.unmapped_columns.map((col) => (
-                  <span className="unmapped-pill" key={col}>{col}</span>
-                ))}
-              </div>
+            <div className="hc-unmapped">
+              <p className="hc-unmapped-label">{r.unmapped_columns.length} nicht zugewiesen</p>
+              <p className="hc-unmapped-list">{r.unmapped_columns.join(" · ")}</p>
             </div>
           )}
-
-          <p className="hc-total">
-            ✓&nbsp;{r.columns_total}/{r.columns_total} Spalten analysiert
-          </p>
         </div>
       )}
 

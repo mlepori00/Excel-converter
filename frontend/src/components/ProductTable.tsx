@@ -119,8 +119,8 @@ export function ProductTable({
                     <td
                       style={{
                         textAlign: "right",
-                        fontWeight: 700,
-                        color: vkIsMarketFallback ? "var(--amp-muted)" : "var(--amp-navy)",
+                        fontWeight: 600,
+                        color: vkIsMarketFallback ? "var(--text-3)" : "var(--text)",
                         fontStyle: vkIsMarketFallback ? "italic" : "normal",
                       }}
                     >
@@ -157,7 +157,7 @@ export function ProductTable({
                         value={edit?.ordered_qty ?? ""}
                       />
                     </td>
-                    <td style={{ textAlign: "right", fontWeight: 700, color: "var(--amp-navy)" }}>
+                    <td style={{ textAlign: "right", fontWeight: 600, color: "var(--text)" }}>
                       {vkCalc != null && edit?.ordered_qty != null && edit.ordered_qty > 0
                         ? `${(vkCalc * edit.ordered_qty).toFixed(2)} ${currency}`
                         : "-"}

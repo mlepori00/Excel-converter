@@ -44,14 +44,21 @@ export function ImportCard({ stage, isLoading, hasFile, parseResult, inputRef, o
           {parseResult!.row_count} Zeilen · {parseResult!.column_count} Spalten
         </p>
       )}
-      <button disabled={isLoading} onClick={() => inputRef.current?.click()} type="button">
-        {hasFile ? "Datei ersetzen" : "Datei hochladen"}
-      </button>
-      {hasFile && (
-        <button className="reset-button" onClick={onReset} type="button">
-          Neue Offerte
+      <div className="import-actions">
+        <button
+          className={hasFile ? "reset-button" : "btn-primary"}
+          disabled={isLoading}
+          onClick={() => inputRef.current?.click()}
+          type="button"
+        >
+          {hasFile ? "Datei ersetzen" : "Datei hochladen"}
         </button>
-      )}
+        {hasFile && (
+          <button className="reset-button" onClick={onReset} type="button">
+            Neue Offerte
+          </button>
+        )}
+      </div>
     </div>
   );
 }
