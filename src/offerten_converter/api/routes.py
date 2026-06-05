@@ -290,7 +290,8 @@ def _api_cost_estimate(text: str) -> float:
     sample = lines[:20]
     avg_chars = sum(len(line) for line in sample) / max(len(sample), 1)
     total_out = int(len(lines) * avg_chars * 3.0 / chars_per_token)
-    cost_usd = total_in / 1_000_000 * 15.0 + total_out / 1_000_000 * 75.0
+    # Haiku 4.5 pricing: $1 / 1M input, $5 / 1M output (USD), then USD→CHF.
+    cost_usd = total_in / 1_000_000 * 1.0 + total_out / 1_000_000 * 5.0
     return round(cost_usd * 0.89, 4)
 
 

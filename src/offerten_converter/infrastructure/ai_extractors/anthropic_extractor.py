@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-MODEL_ANTHROPIC = "claude-opus-4-5"
+MODEL_ANTHROPIC = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 8192
 
 

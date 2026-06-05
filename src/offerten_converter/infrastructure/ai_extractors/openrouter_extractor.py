@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-MODEL_OPENROUTER = "anthropic/claude-opus-4-5"
+MODEL_OPENROUTER = "anthropic/claude-haiku-4-5"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MAX_TOKENS = 8192
 
