@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from offerten_converter.domain.entities import User
+
 
 class AIExtractor(ABC):
     """Port for AI-based product line item extraction."""
@@ -52,3 +54,29 @@ class MarketPricePort(ABC):
     def fetch_price(self, ean: str) -> float | None:
         """Return lowest market price for the given EAN, or None if not found."""
         ...
+
+
+class UserRepository(ABC):
+    """Port for application-user persistence."""
+
+    @abstractmethod
+    def get_by_email(self, email: str) -> User | None: ...
+
+    @abstractmethod
+    def get_by_id(self, user_id: int) -> User | None: ...
+
+    @abstractmethod
+    def create(self, email: str, name: str, password_hash: str) -> User: ...
+
+    @abstractmethod
+    def list_users(self) -> list[User]: ...
+
+
+class PasswordHasher(ABC):
+    """Port for hashing and verifying passwords."""
+
+    @abstractmethod
+    def hash(self, plain: str) -> str: ...
+
+    @abstractmethod
+    def verify(self, plain: str, hashed: str) -> bool: ...

@@ -26,6 +26,7 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
+from offerten_converter.api.auth import router as auth_router  # noqa: E402
 from offerten_converter.api.routes import router  # noqa: E402
 from offerten_converter.infrastructure.db.engine import init_db  # noqa: E402
 
@@ -63,6 +64,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth router is public (no token guard) so /api/auth/login is reachable.
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
 app.include_router(router, prefix="/api", dependencies=[Depends(_require_token)])
 

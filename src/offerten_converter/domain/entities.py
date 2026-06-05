@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 
@@ -34,6 +35,19 @@ class SupplierProfile:
     typical_currency: str = "EUR"
     typical_discount: float = 0.0
     column_hints: str = ""
+
+
+@dataclass
+class User:
+    """An application user. `password_hash` is a credential detail and must
+    never be serialised into an API response."""
+
+    email: str
+    name: str
+    password_hash: str
+    id: Optional[int] = None
+    is_active: bool = True
+    created_at: Optional[datetime] = None
 
 
 @dataclass

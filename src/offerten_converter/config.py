@@ -28,3 +28,21 @@ def database_url() -> str:
     if env_url:
         return env_url
     return f"sqlite:///{DATA_DIR / 'offerten.db'}"
+
+
+# --- Authentication -------------------------------------------------------
+
+JWT_ALGORITHM = "HS256"
+
+# Dev fallback so the app runs without config; MUST be overridden in production.
+_DEV_SECRET = "dev-insecure-secret-change-me-in-production-please"
+
+
+def secret_key() -> str:
+    """Signing key for JWT access tokens. Set SECRET_KEY in production."""
+    return os.getenv("SECRET_KEY") or _DEV_SECRET
+
+
+def access_token_ttl_minutes() -> int:
+    """Access-token lifetime in minutes (default: 12 hours / one work day)."""
+    return int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "720"))
