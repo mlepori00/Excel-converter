@@ -1,4 +1,14 @@
-import type { AuthUser, MapColumnsResult, ParseResult, ProductRow, RowEdit } from "./types";
+import type {
+  AuthUser,
+  MapColumnsResult,
+  OfferDetail,
+  OfferStatusValue,
+  OfferSummary,
+  ParseResult,
+  ProductRow,
+  RowEdit,
+  TreeYear,
+} from "./types";
 
 export const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
@@ -185,15 +195,77 @@ export async function apiExport(
 
 /** Distinct brand names from existing offers (for create-flow autocomplete). */
 export async function apiBrands(): Promise<string[]> {
-  const resp = await fetch(`${API}/api/offers/tree`, { headers: { ..._authHeader() } });
-  if (!resp.ok) {
-    handleUnauthorized(resp.status);
-    return [];
-  }
-  const tree = (await resp.json()) as Array<{ marken: Array<{ marke: string }> }>;
+  const tree = await apiOfferTree();
   const set = new Set<string>();
   tree.forEach((year) => year.marken.forEach((m) => set.add(m.marke)));
   return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+// --- Archive --------------------------------------------------------------
+
+async function _getJson<T>(path: string): Promise<T> {
+  const resp = await fetch(`${API}${path}`, { headers: { ..._authHeader() } });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.json() as Promise<T>;
+}
+
+export async function apiOfferTree(): Promise<TreeYear[]> {
+  return _getJson<TreeYear[]>("/api/offers/tree");
+}
+
+export async function apiListOffers(params: {
+  jahr?: number;
+  marke?: string;
+  lieferant?: string;
+  q?: string;
+}): Promise<OfferSummary[]> {
+  const sp = new URLSearchParams();
+  if (params.jahr != null) sp.set("jahr", String(params.jahr));
+  if (params.marke) sp.set("marke", params.marke);
+  if (params.lieferant) sp.set("lieferant", params.lieferant);
+  if (params.q?.trim()) sp.set("q", params.q.trim());
+  const query = sp.toString();
+  return _getJson<OfferSummary[]>(`/api/offers${query ? `?${query}` : ""}`);
+}
+
+export async function apiGetOffer(id: number): Promise<OfferDetail> {
+  return _getJson<OfferDetail>(`/api/offers/${id}`);
+}
+
+export async function apiSetOfferStatus(
+  id: number,
+  status: OfferStatusValue
+): Promise<OfferSummary> {
+  const resp = await fetch(`${API}/api/offers/${id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+    body: JSON.stringify({ status }),
+  });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.json() as Promise<OfferSummary>;
+}
+
+export async function apiDownloadOfferFile(
+  id: number,
+  which: "original" | "generated"
+): Promise<Blob> {
+  const resp = await fetch(`${API}/api/offers/${id}/${which}`, {
+    headers: { ..._authHeader() },
+  });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.blob();
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

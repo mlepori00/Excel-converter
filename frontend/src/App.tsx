@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { ArchiveView } from "./components/ArchiveView";
 import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
 import { ExportFab } from "./components/ExportFab";
 import { HeaderCard } from "./components/HeaderCard";
@@ -44,6 +45,7 @@ export default function App({ user, onLogout }: AppProps) {
   const [stage, setStage] = useState<Stage>("empty");
   const [error, setError] = useState("");
   const [showChangePw, setShowChangePw] = useState(false);
+  const [view, setView] = useState<"create" | "archive">("create");
 
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [products, setProducts] = useState<ProductRow[]>([]);
@@ -471,6 +473,22 @@ export default function App({ user, onLogout }: AppProps) {
           <span className="brand-divider" />
           <span className="brand-sub">Offerten Converter</span>
         </div>
+        <nav className="app-nav">
+          <button
+            className={view === "create" ? "nav-btn active" : "nav-btn"}
+            onClick={() => setView("create")}
+            type="button"
+          >
+            Neue Offerte
+          </button>
+          <button
+            className={view === "archive" ? "nav-btn active" : "nav-btn"}
+            onClick={() => setView("archive")}
+            type="button"
+          >
+            Archiv
+          </button>
+        </nav>
         <div className="user-menu">
           <span className="user-name">{user.name}</span>
           <button
@@ -494,7 +512,9 @@ export default function App({ user, onLogout }: AppProps) {
         />
       )}
 
-      {stage === "exported" && exportSummary ? (
+      {view === "archive" ? (
+        <ArchiveView />
+      ) : stage === "exported" && exportSummary ? (
         <OverviewScreen
           summary={exportSummary}
           onNewOffer={handleReset}

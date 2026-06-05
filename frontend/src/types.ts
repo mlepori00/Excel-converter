@@ -63,6 +63,50 @@ export type RowEdit = {
   margin_pct: number;
 };
 
+export type OfferStatusValue =
+  | "erstellt"
+  | "versendet"
+  | "bestellung_erhalten"
+  | "abgeschlossen";
+
+export type OfferSummary = {
+  id: number;
+  jahr: number;
+  marke: string;
+  lieferant: string;
+  status: OfferStatusValue;
+  created_by_name: string;
+  created_at: string | null;
+  title: string | null;
+  original_filename: string;
+  generated_filename: string;
+};
+
+export type ArchiveLine = {
+  position: number;
+  sku: string | null;
+  ean: string | null;
+  product_name: string | null;
+  size: string | null;
+  color: string | null;
+  category: string | null;
+  unit_price: number | null;
+  currency: string | null;
+  ordered_qty: number | null;
+  available_qty: number | null;
+  discount_pct: number | null;
+  vk_unit: number | null;
+  vk_total: number | null;
+  margin_actual: number | null;
+  notes: string | null;
+};
+
+export type OfferDetail = OfferSummary & { line_items: ArchiveLine[] };
+
+export type TreeSupplier = { lieferant: string; count: number };
+export type TreeBrand = { marke: string; count: number; lieferanten: TreeSupplier[] };
+export type TreeYear = { jahr: number; count: number; marken: TreeBrand[] };
+
 export type MapColumnsResult = {
   mapped_fields: Record<string, string>; // {canonical_field: original_column}
   columns_total: number;
