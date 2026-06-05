@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from offerten_converter.domain.entities import User
+from offerten_converter.domain.entities import Offer, OfferStatus, User
 
 
 class AIExtractor(ABC):
@@ -86,3 +86,43 @@ class PasswordHasher(ABC):
 
     @abstractmethod
     def verify(self, plain: str, hashed: str) -> bool: ...
+
+
+class OfferRepository(ABC):
+    """Port for archived-offer persistence."""
+
+    @abstractmethod
+    def create(self, offer: Offer, original_bytes: bytes, generated_bytes: bytes) -> Offer:
+        """Persist a new offer with its line items and both file blobs."""
+        ...
+
+    @abstractmethod
+    def get(self, offer_id: int) -> Offer | None:
+        """Return the offer with its line items (no file blobs)."""
+        ...
+
+    @abstractmethod
+    def list(
+        self,
+        *,
+        jahr: int | None = None,
+        marke: str | None = None,
+        lieferant: str | None = None,
+        status: OfferStatus | None = None,
+        query: str | None = None,
+    ) -> list[Offer]:
+        """Return matching offers (metadata only, newest first)."""
+        ...
+
+    @abstractmethod
+    def get_original_file(self, offer_id: int) -> tuple[bytes, str] | None:
+        """Return (bytes, filename) of the original supplier file, or None."""
+        ...
+
+    @abstractmethod
+    def get_generated_file(self, offer_id: int) -> tuple[bytes, str] | None:
+        """Return (bytes, filename) of the generated AMP offer, or None."""
+        ...
+
+    @abstractmethod
+    def update_status(self, offer_id: int, status: OfferStatus) -> Offer | None: ...
