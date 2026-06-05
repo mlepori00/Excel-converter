@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import App from "../App";
 import { apiMe, getToken, setAuthErrorHandler, setToken } from "../api";
 import type { AuthUser } from "../types";
+import { ChangePasswordScreen } from "./ChangePasswordScreen";
 import { LoginScreen } from "./LoginScreen";
 
 export function AuthGate() {
@@ -51,6 +52,9 @@ export function AuthGate() {
   }
   if (!user) {
     return <LoginScreen onLogin={setUser} />;
+  }
+  if (user.must_change_password) {
+    return <ChangePasswordScreen forced onDone={setUser} />;
   }
   return <App user={user} onLogout={handleLogout} />;
 }

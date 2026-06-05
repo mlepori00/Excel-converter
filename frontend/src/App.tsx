@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 
+import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
 import { ExportFab } from "./components/ExportFab";
 import { HeaderCard } from "./components/HeaderCard";
 import { ImportCard } from "./components/ImportCard";
@@ -41,6 +42,7 @@ export default function App({ user, onLogout }: AppProps) {
 
   const [stage, setStage] = useState<Stage>("empty");
   const [error, setError] = useState("");
+  const [showChangePw, setShowChangePw] = useState(false);
 
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [products, setProducts] = useState<ProductRow[]>([]);
@@ -453,11 +455,26 @@ export default function App({ user, onLogout }: AppProps) {
         </div>
         <div className="user-menu">
           <span className="user-name">{user.name}</span>
+          <button
+            type="button"
+            className="logout-btn"
+            onClick={() => setShowChangePw(true)}
+          >
+            Passwort
+          </button>
           <button type="button" className="logout-btn" onClick={onLogout}>
             Abmelden
           </button>
         </div>
       </header>
+
+      {showChangePw && (
+        <ChangePasswordScreen
+          forced={false}
+          onDone={() => setShowChangePw(false)}
+          onCancel={() => setShowChangePw(false)}
+        />
+      )}
 
       {stage === "exported" && exportSummary ? (
         <OverviewScreen

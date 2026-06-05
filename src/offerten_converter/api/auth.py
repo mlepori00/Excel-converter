@@ -37,12 +37,28 @@ class UserOut(BaseModel):
     id: int
     email: str
     name: str
+    must_change_password: bool = False
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+def _user_out(user: User) -> UserOut:
+    assert user.id is not None
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        must_change_password=user.must_change_password,
+    )
 
 
 # --- wiring ---------------------------------------------------------------
@@ -86,13 +102,30 @@ def login(body: LoginRequest, svc: AuthService = Depends(_auth_service)) -> Toke
             detail="E-Mail oder Passwort falsch",
         )
     token = create_access_token(str(user.id))
-    return TokenResponse(
-        access_token=token,
-        user=UserOut(id=user.id, email=user.email, name=user.name),
-    )
+    return TokenResponse(access_token=token, user=_user_out(user))
 
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)) -> UserOut:
+    return _user_out(user)
+
+
+@router.post("/change-password", response_model=UserOut)
+def change_password(
+    body: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    svc: AuthService = Depends(_auth_service),
+) -> UserOut:
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Neues Passwort muss mindestens 8 Zeichen haben",
+        )
     assert user.id is not None
-    return UserOut(id=user.id, email=user.email, name=user.name)
+    try:
+        updated = svc.change_password(user.id, body.current_password, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    return _user_out(updated)

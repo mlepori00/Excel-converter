@@ -1481,3 +1481,25 @@ td:has(.qty-input) { background: #f0f7ff !important; }
 }
 .login-submit:hover:not(:disabled) { background: var(--navy-mid); }
 .login-submit:disabled { opacity: 0.6; }
+
+.login-cancel {
+  margin-top: 2px;
+  background: transparent;
+  color: var(--sub);
+  border: none;
+  padding: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.login-cancel:hover { color: var(--ink); }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 16, 64, 0.55);
+  padding: 24px;
+}

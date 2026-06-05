@@ -47,6 +47,7 @@ class User:
     password_hash: str
     id: Optional[int] = None
     is_active: bool = True
+    must_change_password: bool = False
     created_at: Optional[datetime] = None
 
 

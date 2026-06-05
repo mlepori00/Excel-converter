@@ -60,6 +60,23 @@ export async function apiMe(): Promise<AuthUser> {
   return resp.json() as Promise<AuthUser>;
 }
 
+export async function apiChangePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<AuthUser> {
+  const resp = await fetch(`${API}/api/auth/change-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.json() as Promise<AuthUser>;
+}
+
 function _extractDetail(err: unknown): string {
   if (!err || typeof err !== "object") return String(err ?? "Unbekannter Fehler");
   const detail = (err as Record<string, unknown>).detail;

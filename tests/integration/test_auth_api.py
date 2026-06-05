@@ -22,11 +22,11 @@ def client(tmp_path, monkeypatch):
     Base.metadata.create_all(bind=engine)
     TestSession = sessionmaker(bind=engine, expire_on_commit=False)
 
-    # Seed a user.
+    # Seed users: Anna (normal) and Max (must change password on first login).
     session = TestSession()
-    AuthService(SqlUserRepository(session), BcryptPasswordHasher()).create_user(
-        "Anna@Example.CH", "Anna", "geheim123"
-    )
+    svc = AuthService(SqlUserRepository(session), BcryptPasswordHasher())
+    svc.create_user("Anna@Example.CH", "Anna", "geheim123")
+    svc.create_user("max@example.ch", "Max", "temp1234", must_change_password=True)
     session.close()
 
     def _override_get_db():
@@ -106,3 +106,64 @@ def test_protected_route_reachable_with_token(client):
     token = _login_token(client)
     resp = client.get("/api/profiles", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
+
+
+# --- password change (phase 1f) ------------------------------------------
+
+def _login(client, email: str, password: str):
+    return client.post("/api/auth/login", json={"email": email, "password": password})
+
+
+def test_login_surfaces_must_change_password(client):
+    body = _login(client, "max@example.ch", "temp1234").json()
+    assert body["user"]["must_change_password"] is True
+
+
+def test_normal_user_need_not_change_password(client):
+    body = _login(client, "anna@example.ch", "geheim123").json()
+    assert body["user"]["must_change_password"] is False
+
+
+def test_change_password_requires_auth(client):
+    resp = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "x", "new_password": "yyyyyyyy"},
+    )
+    assert resp.status_code == 401
+
+
+def test_change_password_rejects_wrong_current(client):
+    token = _login(client, "max@example.ch", "temp1234").json()["access_token"]
+    resp = client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "falsch", "new_password": "neuespw123"},
+    )
+    assert resp.status_code == 400
+
+
+def test_change_password_rejects_too_short(client):
+    token = _login(client, "max@example.ch", "temp1234").json()["access_token"]
+    resp = client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "temp1234", "new_password": "kurz"},
+    )
+    assert resp.status_code == 400
+
+
+def test_change_password_success_clears_flag_and_updates_login(client):
+    token = _login(client, "max@example.ch", "temp1234").json()["access_token"]
+    resp = client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "temp1234", "new_password": "neuespw123"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["must_change_password"] is False
+
+    # Old password no longer works, new one does, and the flag stays cleared.
+    assert _login(client, "max@example.ch", "temp1234").status_code == 401
+    after = _login(client, "max@example.ch", "neuespw123")
+    assert after.status_code == 200
+    assert after.json()["user"]["must_change_password"] is False

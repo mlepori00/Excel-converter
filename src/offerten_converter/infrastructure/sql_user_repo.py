@@ -17,6 +17,7 @@ def _to_domain(row: UserModel) -> User:
         name=row.name,
         password_hash=row.password_hash,
         is_active=row.is_active,
+        must_change_password=row.must_change_password,
         created_at=row.created_at,
     )
 
@@ -35,11 +36,26 @@ class SqlUserRepository(UserRepository):
         row = self._s.get(UserModel, user_id)
         return _to_domain(row) if row is not None else None
 
-    def create(self, email: str, name: str, password_hash: str) -> User:
+    def create(self, email: str, name: str, password_hash: str,
+               must_change_password: bool = False) -> User:
         row = UserModel(
-            email=email, name=name, password_hash=password_hash, is_active=True
+            email=email,
+            name=name,
+            password_hash=password_hash,
+            is_active=True,
+            must_change_password=must_change_password,
         )
         self._s.add(row)
+        self._s.commit()
+        self._s.refresh(row)
+        return _to_domain(row)
+
+    def set_password(self, user_id: int, password_hash: str) -> User | None:
+        row = self._s.get(UserModel, user_id)
+        if row is None:
+            return None
+        row.password_hash = password_hash
+        row.must_change_password = False
         self._s.commit()
         self._s.refresh(row)
         return _to_domain(row)

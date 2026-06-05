@@ -28,8 +28,34 @@ class AuthService:
             return None
         return user
 
-    def create_user(self, email: str, name: str, password: str) -> User:
+    def create_user(
+        self,
+        email: str,
+        name: str,
+        password: str,
+        must_change_password: bool = False,
+    ) -> User:
         """Create a user with a hashed password. Email is normalised to lowercase."""
         return self._users.create(
-            self._normalise_email(email), name, self._hasher.hash(password)
+            self._normalise_email(email),
+            name,
+            self._hasher.hash(password),
+            must_change_password=must_change_password,
         )
+
+    def change_password(
+        self, user_id: int, current_password: str, new_password: str
+    ) -> User:
+        """Verify the current password and set a new one (clears must-change flag).
+
+        Raises ValueError if the current password is wrong or the user is gone.
+        """
+        user = self._users.get_by_id(user_id)
+        if user is None:
+            raise ValueError("Benutzer nicht gefunden")
+        if not self._hasher.verify(current_password, user.password_hash):
+            raise ValueError("Aktuelles Passwort ist falsch")
+        updated = self._users.set_password(user_id, self._hasher.hash(new_password))
+        if updated is None:
+            raise ValueError("Benutzer nicht gefunden")
+        return updated

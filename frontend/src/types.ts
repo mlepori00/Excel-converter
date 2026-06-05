@@ -2,6 +2,7 @@ export type AuthUser = {
   id: number;
   email: string;
   name: string;
+  must_change_password: boolean;
 };
 
 export type Stage =

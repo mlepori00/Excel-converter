@@ -56,12 +56,31 @@ SessionLocal = sessionmaker(
 )
 
 
+def _apply_lightweight_migrations(eng: Engine) -> None:
+    """Additive, idempotent column migrations for SQLite until Alembic (phase 2).
+
+    Only adds missing columns; never drops or rewrites data. Needed because
+    create_all() does not alter tables that already exist on disk.
+    """
+    if not eng.url.get_backend_name().startswith("sqlite"):
+        return
+    with eng.begin() as conn:
+        existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(users)")}
+        if existing and "must_change_password" not in existing:
+            conn.exec_driver_sql(
+                "ALTER TABLE users "
+                "ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 0"
+            )
+            logger.info("Migration: added users.must_change_password")
+
+
 def init_db() -> None:
     """Create all tables that don't yet exist. Idempotent; safe on every start."""
     # Import models so they register on Base.metadata before create_all.
     from offerten_converter.infrastructure.db import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _apply_lightweight_migrations(engine)
     logger.info("Database ready at %s", engine.url)
 
 
