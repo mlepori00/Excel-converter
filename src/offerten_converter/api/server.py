@@ -7,15 +7,13 @@ Start with:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Security, status
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 _SRC = str(Path(__file__).resolve().parents[3])
 if _SRC not in sys.path:
@@ -26,21 +24,10 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
+from offerten_converter.api.auth import get_current_user  # noqa: E402
 from offerten_converter.api.auth import router as auth_router  # noqa: E402
 from offerten_converter.api.routes import router  # noqa: E402
 from offerten_converter.infrastructure.db.engine import init_db  # noqa: E402
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-def _require_token(
-    credentials: HTTPAuthorizationCredentials | None = Security(_bearer),
-) -> None:
-    expected = os.getenv("API_SECRET_TOKEN", "")
-    if not expected:
-        return  # token auth disabled when env var not set
-    if credentials is None or credentials.credentials != expected:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ungültiges Token")
 
 
 @asynccontextmanager
@@ -65,10 +52,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auth router is public (no token guard) so /api/auth/login is reachable.
+# Auth router is public (no guard) so /api/auth/login is reachable.
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
-app.include_router(router, prefix="/api", dependencies=[Depends(_require_token)])
+# Every other /api/* route requires a logged-in user (valid Bearer JWT).
+app.include_router(router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @app.get("/health")

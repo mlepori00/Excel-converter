@@ -12,7 +12,9 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from offerten_converter.api.auth import get_current_user
 from offerten_converter.api.server import app
+from offerten_converter.domain.entities import User
 
 client = TestClient(app)
 
@@ -22,13 +24,19 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @pytest.fixture(autouse=True)
-def _disable_auth(monkeypatch):
-    """Disable token auth so route tests don't depend on the developer's .env.
+def _auth_override():
+    """Treat every /api/* request as an authenticated user.
 
-    server.py loads .env at import; if API_SECRET_TOKEN is set there, every
-    /api/* request would return 401. Auth is disabled when the var is unset.
+    Phase 1c protects the main router with get_current_user. These route tests
+    exercise the business endpoints, not auth, so we override the dependency
+    with a fixed test user. Module-scoped autouse → does not affect the real
+    auth-flow tests in test_auth_api.py.
     """
-    monkeypatch.delenv("API_SECRET_TOKEN", raising=False)
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=1, email="test@amp.ch", name="Test User", password_hash="x"
+    )
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 # ---------------------------------------------------------------------------

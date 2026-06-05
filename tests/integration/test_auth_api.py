@@ -89,3 +89,20 @@ def test_me_returns_current_user_with_token(client):
 def test_me_rejects_garbage_token(client):
     resp = client.get("/api/auth/me", headers={"Authorization": "Bearer not.a.jwt"})
     assert resp.status_code == 401
+
+
+def _login_token(client) -> str:
+    return client.post(
+        "/api/auth/login", json={"email": "anna@example.ch", "password": "geheim123"}
+    ).json()["access_token"]
+
+
+def test_protected_route_requires_auth(client):
+    # /api/profiles is guarded by get_current_user since phase 1c.
+    assert client.get("/api/profiles").status_code == 401
+
+
+def test_protected_route_reachable_with_token(client):
+    token = _login_token(client)
+    resp = client.get("/api/profiles", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
