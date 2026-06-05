@@ -24,6 +24,7 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
+from offerten_converter.api.archive_routes import router as archive_router  # noqa: E402
 from offerten_converter.api.auth import get_current_user  # noqa: E402
 from offerten_converter.api.auth import router as auth_router  # noqa: E402
 from offerten_converter.api.routes import router  # noqa: E402
@@ -57,6 +58,7 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
 # Every other /api/* route requires a logged-in user (valid Bearer JWT).
 app.include_router(router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(archive_router, prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @app.get("/health")
