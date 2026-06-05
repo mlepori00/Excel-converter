@@ -20,6 +20,16 @@ _DEMO_DIR = Path(__file__).parents[2] / "demo" / "offerten_architekturen"
 _DEMO_FILE = _DEMO_DIR / "1.xlsx"
 
 
+@pytest.fixture(autouse=True)
+def _disable_auth(monkeypatch):
+    """Disable token auth so route tests don't depend on the developer's .env.
+
+    server.py loads .env at import; if API_SECRET_TOKEN is set there, every
+    /api/* request would return 401. Auth is disabled when the var is unset.
+    """
+    monkeypatch.delenv("API_SECRET_TOKEN", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # /health
 # ---------------------------------------------------------------------------

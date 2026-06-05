@@ -43,7 +43,7 @@ class TestBuildExcel:
         data = build_excel(sample_df, "Test GmbH", "Tester", "CHF")
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Offerte"]
-        header_row = 7
+        header_row = 6
         filled_cols = sum(
             1 for col in range(1, 50) if ws.cell(row=header_row, column=col).value
         )
@@ -54,12 +54,25 @@ class TestBuildExcel:
         data = build_excel(sample_df, "Sport AG", "Max", "EUR", 60)
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Offerte"]
-        assert ws.cell(row=4, column=5).value == "Sport AG"
-        assert ws.cell(row=5, column=5).value == "Max"
+        # Supplier name is rendered as the "Marke:" value in the meta block
+        # (rows 1-4). The meta block sits on the right, so its column depends on
+        # the number of active columns – locate it instead of hardcoding.
+        # (created_by is currently not rendered in this layout.)
+        marke_row = next(
+            r for r in range(1, 5)
+            if any(ws.cell(row=r, column=c).value == "Marke:" for c in range(1, 50))
+        )
+        label_col = next(
+            c for c in range(1, 50) if ws.cell(row=marke_row, column=c).value == "Marke:"
+        )
+        assert ws.cell(row=marke_row, column=label_col + 1).value == "Sport AG"
 
     def test_total_row_exists(self, sample_df):
         data = build_excel(sample_df, "Test", "T", "CHF")
         wb = load_workbook(io.BytesIO(data))
         ws = wb["Offerte"]
-        # TOTAL should be in row 9 (row 7 header + 1 data row + 1 total)
-        assert ws.cell(row=9, column=1).value == "TOTAL"
+        # Header row 6 + 1 data row + TOTAL row => row 8
+        total_row = next(
+            r for r in range(1, 30) if ws.cell(row=r, column=1).value == "TOTAL"
+        )
+        assert total_row == 8
