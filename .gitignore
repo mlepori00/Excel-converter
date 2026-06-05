@@ -8,6 +8,12 @@
 # Uploaded files (never written to disk, but just in case)
 /uploads/
 
+# Durable app data (SQLite database + WAL/SHM sidecar files)
+/data/
+*.db
+*.db-wal
+*.db-shm
+
 # Python
 __pycache__/
 *.py[cod]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,6 +27,7 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
 from offerten_converter.api.routes import router  # noqa: E402
+from offerten_converter.infrastructure.db.engine import init_db  # noqa: E402
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -40,10 +42,18 @@ def _require_token(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ungültiges Token")
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Initialise the database (create tables) on startup."""
+    init_db()
+    yield
+
+
 app = FastAPI(
     title="AMP Sport Offerten Converter API",
     version="1.0.0",
     description="Converts supplier Excel offers into standardised AMP reseller offers.",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
