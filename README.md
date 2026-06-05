@@ -1,8 +1,8 @@
 # Offerten Converter
 
-A local Streamlit app for sports distributors: upload a supplier Excel quotation,
-let AI extract the line items, set your margin, and export a formatted offer for
-your resellers – all in one step.
+A web app (FastAPI backend + React frontend) for sports distributors: upload a
+supplier Excel quotation, let AI extract the line items, set your margin, and
+export a formatted offer for your resellers – all in one step.
 
 ---
 
@@ -103,7 +103,6 @@ train models for API customers. See [Anthropic's Privacy Policy](https://www.ant
 
 ```
 src/offerten_converter/
-  main.py              # Streamlit entry point + dependency wiring
   domain/
     entities.py        # LineItem, SupplierProfile, QuotationSettings (dataclasses)
     pricing.py         # Pure functions: convert_to_target, calculate_vk, actual_margin
@@ -118,14 +117,20 @@ src/offerten_converter/
     ai_extractors/
       anthropic_extractor.py   # Anthropic direct adapter
       openrouter_extractor.py  # OpenRouter adapter
+    column_mapper.py    # Claude-assisted column mapping
+    market_price_scraper.py # Market price sampling from the web
+    ecb_rates.py        # Currency exchange rates
+    extraction_cache.py # Caches AI extraction results
     excel_reader.py     # Read Excel/CSV with smart header detection
     excel_writer.py     # Formatted openpyxl Excel output
     file_profile_repo.py # JSON file-based profile CRUD
-  ui/
-    state.py            # Session state initialization
-    tab_konvertieren.py # Tab 1: Upload → Sanitize → Extract → Price → Export
-    tab_lieferanten.py  # Tab 2: Supplier profile management
-    tab_einstellungen.py # Tab 3: Settings (margins, currencies, rates)
+  api/
+    server.py           # FastAPI app + entry point (serves built frontend in prod)
+    routes.py           # HTTP endpoints + dependency wiring
+    schemas.py          # Pydantic request/response models
+    mappers.py          # Domain <-> API schema mapping
+    file_store.py       # In-memory upload handling
+frontend/               # React + Vite + TypeScript UI (build output: frontend/dist)
 profiles/               # Saved supplier profiles (.gitignored)
 .env                    # API key (.gitignored)
 ```
@@ -137,26 +142,21 @@ but itself. Application defines ports (ABCs); infrastructure implements them.
 
 ## Usage
 
-1. **Tab "Konvertieren"**
-   - Enter supplier name manually
-   - Optionally load a saved supplier profile
-   - Upload `.xlsx`, `.xls`, or `.csv` quotation
-   - Review sanitization log (what was removed)
-   - Click "Extraktion starten" – Claude extracts all line items
-   - Review and edit the extracted table
-   - Set target margin % and currency in the sidebar
-   - Check the live pricing preview (green/orange/red margin indicators)
-   - Click "Export Offerte" to download the formatted Excel
+The app is a single screen built from cards:
 
-2. **Tab "Lieferanten"**
-   - View, edit, and delete saved supplier profiles
-   - Profiles store only currency/discount defaults and column hints – no PII
+1. **Import** – drag in or select an `.xlsx`, `.xls`, or `.csv` quotation.
+   - If columns are detected automatically, the line items appear straight away.
+   - Otherwise use **Header analysieren** (Claude-assisted column mapping) or
+     **Extraktion starten** (full AI extraction) to pull out the line items.
+2. **Review** – edit any cell in the product table and search/filter rows.
+3. **Settings** – enter the supplier name, set the target margin % and currency,
+   and choose the pricing mode (margin-based or market-based with a discount).
+4. **Market prices** *(optional)* – sample or fetch market prices by EAN to
+   benchmark or drive market-based pricing.
+5. **Export** – download the formatted AMP Excel offer; an overview screen
+   confirms supplier, article count, and currency.
 
-3. **Tab "Einstellungen"**
-   - Set company name (appears in Excel header)
-   - Adjust default margin and currency
-   - Update static currency exchange rates
-   - Read the data-privacy summary
+Supplier profiles store only currency/discount defaults and column hints – no PII.
 
 ---
 

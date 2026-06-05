@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
-from offerten_converter.infrastructure.excel_writer import OUTPUT_COLUMNS, build_excel
+from offerten_converter.infrastructure.excel_writer import _active_columns, build_excel
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ class TestBuildExcel:
         filled_cols = sum(
             1 for col in range(1, 50) if ws.cell(row=header_row, column=col).value
         )
-        assert filled_cols == len(OUTPUT_COLUMNS)
+        assert filled_cols == len(_active_columns(sample_df))
         assert ws.cell(row=header_row, column=1).value == "Pos"
 
     def test_meta_header(self, sample_df):

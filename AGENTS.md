@@ -1,6 +1,6 @@
 # Offerten Converter
 
-Streamlit-App für Sportartikel-Distributoren: Lieferanten-Excel-Offerten hochladen → KI extrahiert Positionen → Marge setzen → standardisierte Reseller-Offerte als Excel exportieren.
+Web-App (FastAPI + React) für Sportartikel-Distributoren: Lieferanten-Excel-Offerten hochladen → KI extrahiert Positionen → Marge setzen → standardisierte Reseller-Offerte als Excel exportieren.
 
 ## Architektur (Clean Architecture)
 
@@ -8,21 +8,30 @@ Streamlit-App für Sportartikel-Distributoren: Lieferanten-Excel-Offerten hochla
 src/offerten_converter/
   domain/          → Entities (LineItem, SupplierProfile), Pricing-Logik (pure functions)
   application/     → Use Cases, Ports (abstrakte Interfaces)
-  infrastructure/  → Codex API Adapter, Excel Reader/Writer, File-based Profile Repository
-  ui/              → Streamlit UI (Tabs, Session State)
-  main.py          → Entry Point + Dependency Injection
+  infrastructure/  → Claude/OpenRouter Extractors, Excel Reader/Writer, Profile Repo,
+                     Column Mapper, Market Price Scraper, ECB Rates, Extraction Cache
+  api/             → FastAPI Server (routes, schemas, mappers, file_store) + Entry Point
+frontend/          → React + Vite + TypeScript UI (kompiliert nach frontend/dist)
 ```
 
-**Dependency Rule:** Innere Schichten importieren nie äussere. Domain kennt nichts ausser sich selbst. Application definiert Ports (ABCs); Infrastructure implementiert sie.
+**Dependency Rule:** Innere Schichten importieren nie äussere. Domain kennt nichts ausser sich selbst. Application definiert Ports (ABCs); Infrastructure implementiert sie. Die `api/`-Schicht verdrahtet die Dependencies (DI) und exponiert HTTP-Endpunkte; das React-Frontend spricht ausschliesslich über diese API.
 
 ## Commands
 
 ```bash
-streamlit run src/offerten_converter/main.py   # App starten
-pytest                                          # Alle Tests
-pytest tests/unit                               # Nur Unit Tests
-pytest -m integration                           # Nur Integration Tests
-ruff check src/ tests/                          # Linting
+# Backend (FastAPI) – Dev
+$env:PYTHONPATH="src"; uvicorn offerten_converter.api.server:app --reload --port 8000
+
+# Frontend (React/Vite) – Dev
+cd frontend; npm run dev          # http://localhost:5173
+
+# Production / Deployment (Backend serviert das gebaute Frontend)
+docker compose up --build         # http://localhost:8000
+
+pytest                            # Alle Tests
+pytest tests/unit                 # Nur Unit Tests
+pytest -m integration             # Nur Integration Tests
+ruff check src/ tests/            # Linting
 ```
 
 ## Konventionen
@@ -36,8 +45,8 @@ ruff check src/ tests/                          # Linting
 
 ## Testing
 
-- Unit Tests: kein Filesystem, kein Netzwerk, kein Streamlit
-- Integration Tests: `tmp_path` für Dateioperationen, Mocked AI für Extraktor
+- Unit Tests: kein Filesystem, kein Netzwerk
+- Integration Tests: `tmp_path` für Dateioperationen, Mocked AI für Extraktor; API-Routen via FastAPI `TestClient`
 - E2E Tests: komplette Pipeline (sanitize → extract → price → export), AI gemockt
 - Test-Fixtures in `tests/conftest.py`
 
