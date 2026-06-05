@@ -3,10 +3,19 @@ services:
     build:
       context: .
       args:
-        VITE_API_TOKEN: ${VITE_API_TOKEN}
+        # Optional: bake the API base URL into the frontend build.
+        # Leave empty when the backend serves the frontend on the same origin.
+        VITE_API_URL: ${VITE_API_URL:-}
     ports:
       - "8000:8000"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      API_SECRET_TOKEN: ${API_SECRET_TOKEN}
+      # Signs login JWTs – set a long random value in production.
+      SECRET_KEY: ${SECRET_KEY}
+    volumes:
+      # Persist the SQLite database (and future blobs) across redeploys.
+      - offerten-data:/app/data
     restart: unless-stopped
+
+volumes:
+  offerten-data:
