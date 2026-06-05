@@ -32,7 +32,8 @@ _SYSTEM_PROMPT = (
     "- discount_pct: discount as a percentage\n\n"
     "Rules:\n"
     "- Each canonical field can be assigned to AT MOST ONE column\n"
-    "- If multiple price columns exist, pick the trade price (Net/Offer/Wholesale) over retail/RRP\n"
+    "- If multiple price columns exist, pick the trade price "
+    "(Net/Offer/Wholesale) over retail/RRP\n"
     "- 'Model' is product_name if values look like names (Arizona, Air Max 90); "
     "it is sku if values look like codes (BK-1234, ART-567)\n"
     "- Columns with no matching canonical field: assign null\n"
@@ -58,7 +59,9 @@ def estimate_cost_chf(df: pd.DataFrame, n_samples: int = 5) -> float:
     # Output: JSON dict with each header name + canonical value; avg ~45 chars/entry
     output_chars = sum(len(h) + 20 for h in headers) + 20
     output_tokens = max(40, int(output_chars / chars_per_token))
-    cost_usd = (input_tokens * _HAIKU_INPUT_USD_PER_M + output_tokens * _HAIKU_OUTPUT_USD_PER_M) / 1_000_000
+    cost_usd = (
+        input_tokens * _HAIKU_INPUT_USD_PER_M + output_tokens * _HAIKU_OUTPUT_USD_PER_M
+    ) / 1_000_000
     return round(cost_usd * _CHF_PER_USD, 5)
 
 

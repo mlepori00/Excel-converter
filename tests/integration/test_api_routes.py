@@ -18,6 +18,7 @@ client = TestClient(app)
 
 _DEMO_DIR = Path(__file__).parents[2] / "demo" / "offerten_architekturen"
 _DEMO_FILE = _DEMO_DIR / "1.xlsx"
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +50,7 @@ def test_parse_returns_file_id_and_products():
     with open(_DEMO_FILE, "rb") as fh:
         resp = client.post(
             "/api/offer/parse",
-            files={"file": ("1.xlsx", fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            files={"file": ("1.xlsx", fh, _XLSX_MIME)},
         )
     assert resp.status_code == 200
     data = resp.json()
@@ -79,7 +80,7 @@ def test_extract_with_mocked_ai():
     with open(_DEMO_FILE, "rb") as fh:
         parse_resp = client.post(
             "/api/offer/parse",
-            files={"file": ("1.xlsx", fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            files={"file": ("1.xlsx", fh, _XLSX_MIME)},
         )
     file_id = parse_resp.json()["file_id"]
 
@@ -94,7 +95,10 @@ def test_extract_with_mocked_ai():
     ]
     mock_usage = {"input_tokens": 100, "output_tokens": 50}
 
-    with patch("offerten_converter.api.routes.extract_line_items", return_value=(mock_items, mock_usage)):
+    with patch(
+        "offerten_converter.api.routes.extract_line_items",
+        return_value=(mock_items, mock_usage),
+    ):
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-123"}):
             resp = client.post(
                 "/api/offer/extract",
@@ -160,7 +164,11 @@ def test_export_empty_rows_returns_400():
 def test_export_missing_supplier_returns_400():
     resp = client.post(
         "/api/offer/export",
-        json={"file_id": "x", "supplier_name": "  ", "rows": [{"unit_price": 10.0, "margin_pct": 40.0}]},
+        json={
+            "file_id": "x",
+            "supplier_name": "  ",
+            "rows": [{"unit_price": 10.0, "margin_pct": 40.0}],
+        },
     )
     assert resp.status_code == 400
 

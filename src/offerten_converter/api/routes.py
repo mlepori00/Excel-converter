@@ -17,9 +17,7 @@ from pydantic import BaseModel
 
 from offerten_converter.api import file_store
 from offerten_converter.api.mappers import (
-    build_export_preview,
     dataframe_to_product_rows,
-    read_result_to_file_metadata,
 )
 from offerten_converter.application.calculate_prices import enrich_dataframe
 from offerten_converter.application.export_quotation import export_to_excel
@@ -29,7 +27,11 @@ from offerten_converter.application.sanitize_data import sanitize_dataframe
 from offerten_converter.domain.pricing import DEFAULT_RATES
 from offerten_converter.infrastructure import extraction_cache
 from offerten_converter.infrastructure.ai_extractors import get_call_fn
-from offerten_converter.infrastructure.column_mapper import apply_mapping, estimate_cost_chf, map_columns
+from offerten_converter.infrastructure.column_mapper import (
+    apply_mapping,
+    estimate_cost_chf,
+    map_columns,
+)
 from offerten_converter.infrastructure.excel_reader import (
     get_recommended_sheet_name,
     get_sheet_names,
@@ -148,7 +150,11 @@ def _parse_file(file_bytes: bytes, filename: str, sheet_name: str | None) -> Any
     sheets = get_sheet_names(file_bytes, filename)
     if sheet_name and sheet_name not in sheets:
         raise HTTPException(400, f"Sheet '{sheet_name}' nicht gefunden. Verfügbar: {sheets}")
-    chosen = sheet_name or get_recommended_sheet_name(file_bytes, filename) or (sheets[0] if sheets else None)
+    chosen = (
+        sheet_name
+        or get_recommended_sheet_name(file_bytes, filename)
+        or (sheets[0] if sheets else None)
+    )
     result = read_offer_file(file_bytes, filename, chosen)
     return result, sheets, chosen
 
@@ -280,9 +286,9 @@ def _api_cost_estimate(text: str) -> float:
     content_tok = len(text) // chars_per_token
     chunk_tok = content_tok // max(n_chunks, 1)
     total_in = (system_tok + chunk_tok) * n_chunks
-    lines = [l for l in text.splitlines()[1:] if l.strip()]
+    lines = [line for line in text.splitlines()[1:] if line.strip()]
     sample = lines[:20]
-    avg_chars = sum(len(l) for l in sample) / max(len(sample), 1)
+    avg_chars = sum(len(line) for line in sample) / max(len(sample), 1)
     total_out = int(len(lines) * avg_chars * 3.0 / chars_per_token)
     cost_usd = total_in / 1_000_000 * 15.0 + total_out / 1_000_000 * 75.0
     return round(cost_usd * 0.89, 4)

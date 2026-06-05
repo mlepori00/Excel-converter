@@ -214,7 +214,9 @@ def build_excel(
     # ── Address lines – rows 2-4 ─────────────────────────────────────────────
     addr_lines = ["Poststrasse 6  |  6302 Zug", "Schweiz", "www.ampsport.ch"]
     for row_i, addr in enumerate(addr_lines, start=2):
-        ws.merge_cells(start_row=row_i, start_column=LOGO_COLS + 1, end_row=row_i, end_column=COMPANY_END)
+        ws.merge_cells(
+            start_row=row_i, start_column=LOGO_COLS + 1, end_row=row_i, end_column=COMPANY_END
+        )
         c = ws.cell(row=row_i, column=LOGO_COLS + 1, value=addr)
         _apply(c,
             font=Font(name="Calibri", size=9, color="5A6A8A"),
@@ -238,7 +240,9 @@ def build_excel(
             alignment=Alignment(horizontal="right", vertical="center"),
             border=NO_BORDER,
         )
-        ws.merge_cells(start_row=row_i, start_column=META_VAL_S, end_row=row_i, end_column=META_VAL_E)
+        ws.merge_cells(
+            start_row=row_i, start_column=META_VAL_S, end_row=row_i, end_column=META_VAL_E
+        )
         c_val = ws.cell(row=row_i, column=META_VAL_S, value=val)
         _apply(c_val,
             font=Font(name="Calibri", size=9, color=NAVY),
