@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ArchiveView } from "./components/ArchiveView";
+import { LoadingOverlay } from "./components/LoadingOverlay";
 import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
 import { ColumnMappingModal } from "./components/ColumnMappingModal";
 import { ExportFab } from "./components/ExportFab";
@@ -849,6 +850,22 @@ export default function App({ user, onLogout }: AppProps) {
             />
           )}
         </>
+      )}
+
+      {stage === "parsing" && (
+        <LoadingOverlay message="Datei wird gelesen …" />
+      )}
+      {stage === "extracting" && (
+        <LoadingOverlay
+          message="Artikel werden extrahiert …"
+          sub="Claude analysiert die Datei. Das dauert 10–30 Sekunden."
+        />
+      )}
+      {stage === "exporting" && (
+        <LoadingOverlay message="Offerte wird erstellt …" />
+      )}
+      {isMappingColumns && (
+        <LoadingOverlay message="Spalten werden analysiert …" />
       )}
     </main>
   );

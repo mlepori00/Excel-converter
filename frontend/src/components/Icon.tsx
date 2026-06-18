@@ -102,7 +102,7 @@ export function Icon({ name, size = 20, strokeWidth = 2 }: IconProps) {
   return (
     <svg
       aria-hidden="true"
-      className="icon"
+      className={name === "loader" ? "icon icon--spin" : "icon"}
       fill="none"
       height={size}
       stroke="currentColor"

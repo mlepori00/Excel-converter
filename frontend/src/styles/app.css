@@ -1920,6 +1920,76 @@ td:has(.qty-input) { background: rgba(0, 113, 227, 0.04); }
   .fab-export { left: 16px; right: 16px; bottom: 16px; justify-content: center; }
 }
 
+/* ── Spinner animation ───────────────────────────────────────────────────── */
+@keyframes icon-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.icon--spin {
+  animation: icon-spin 0.9s linear infinite;
+  transform-origin: center center;
+  transform-box: fill-box;
+  display: block;
+}
+
+/* ── Loading overlay ─────────────────────────────────────────────────────── */
+@keyframes overlay-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes overlay-card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: overlay-fade-in 0.18s ease;
+}
+
+.loading-overlay__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface);
+  border-radius: var(--r-xl);
+  padding: 40px 56px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.08);
+  color: var(--text);
+  min-width: 240px;
+  text-align: center;
+  animation: overlay-card-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.loading-overlay__card .icon--spin {
+  color: var(--accent);
+}
+
+.loading-overlay__msg {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.loading-overlay__sub {
+  font-size: 13px;
+  color: var(--text-2);
+  margin: 0;
+  line-height: 1.4;
+}
+
 /* ── Reduced motion ──────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
