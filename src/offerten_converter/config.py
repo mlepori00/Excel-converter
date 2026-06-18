@@ -8,6 +8,7 @@ app runs out-of-the-box in local dev without any .env present.
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 # .../OfferConverterAMP  (config.py lives at src/offerten_converter/config.py)
@@ -34,21 +35,39 @@ def database_url() -> str:
 
 JWT_ALGORITHM = "HS256"
 
-# Dev fallback so the app runs without config; MUST be overridden in production.
-_DEV_SECRET = "dev-insecure-secret-change-me-in-production-please"
+# Random per-process fallback: safe because it can't be guessed from source code.
+# Tokens signed with this key are invalidated on server restart — fine for dev.
+# Set SECRET_KEY in production for persistent, cross-restart tokens.
+_DEV_SECRET = secrets.token_hex(32)
+
+
+def _is_dev_env() -> bool:
+    """True only in explicit dev/local/test environments (via APP_ENV)."""
+    return os.getenv("APP_ENV", "dev").lower() in ("dev", "local", "test")
 
 
 def secret_key() -> str:
-    """Signing key for JWT access tokens. Set SECRET_KEY in production."""
+    """Signing key for JWT access tokens.
+
+    In a dev environment (APP_ENV unset/dev/local/test) an ephemeral random key
+    is used when SECRET_KEY is missing. In any other environment a missing
+    SECRET_KEY is a hard startup error — fail closed instead of silently
+    degrading auth (tokens that reset on every restart / break across workers).
+    """
     import logging
     key = os.getenv("SECRET_KEY")
-    if not key:
+    if key:
+        return key
+    if _is_dev_env():
         logging.getLogger(__name__).warning(
-            "SECRET_KEY not set — using insecure dev default. "
-            "Set SECRET_KEY in production."
+            "SECRET_KEY not set — using an ephemeral dev key. "
+            "JWT tokens are invalidated on every restart. Set SECRET_KEY in production."
         )
         return _DEV_SECRET
-    return key
+    raise RuntimeError(
+        "SECRET_KEY must be set when APP_ENV is not a dev environment "
+        "(dev/local/test). Set SECRET_KEY to a long random value."
+    )
 
 
 def access_token_ttl_minutes() -> int:

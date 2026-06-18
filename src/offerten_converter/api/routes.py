@@ -646,6 +646,12 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
             xl_raw = pd.ExcelFile(io.BytesIO(file_bytes))
             _sheet = source_sheet or xl_raw.sheet_names[0]
             df_truly_raw = xl_raw.parse(_sheet, header=None, dtype=str, nrows=100)
+            # The regex PII pass (email/phone/IBAN/VAT) MUST run before this text
+            # reaches the AI — the processed-view sanitization above does not cover
+            # these unprocessed header=None rows. Column-keyword dropping cannot
+            # fire here (columns are integers), so plain supplier names in title
+            # rows remain a known residual (see security review P2-4).
+            df_truly_raw, _ = sanitize_dataframe(df_truly_raw)
             raw_text = df_truly_raw.fillna("").to_string(index=False, header=False)
             sanitized_text = (
                 "=== RAW SHEET (first 100 rows, no header processing) ===\n"

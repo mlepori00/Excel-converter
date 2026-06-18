@@ -91,6 +91,21 @@ def get_current_user(
     return user
 
 
+def require_password_changed(user: User = Depends(get_current_user)) -> User:
+    """Like get_current_user, but also rejects users who must still change their
+    initial password. Guards the application routers so the must_change_password
+    gate is enforced server-side, not only in the React SPA (which is bypassable
+    via curl/Postman/a saved token). /me and /change-password stay on plain
+    get_current_user so a forced user can still authenticate and change it.
+    """
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Passwort muss zuerst geändert werden",
+        )
+    return user
+
+
 # --- endpoints ------------------------------------------------------------
 
 @router.post("/login", response_model=TokenResponse)

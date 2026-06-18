@@ -25,22 +25,21 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 
+from offerten_converter import config  # noqa: E402
 from offerten_converter.api.archive_routes import router as archive_router  # noqa: E402
-from offerten_converter.api.auth import get_current_user  # noqa: E402
+from offerten_converter.api.auth import require_password_changed  # noqa: E402
 from offerten_converter.api.auth import router as auth_router  # noqa: E402
 from offerten_converter.api.routes import router  # noqa: E402
 from offerten_converter.infrastructure.db.engine import init_db  # noqa: E402
-
 
 _logger = logging.getLogger(__name__)
 
 
 def _startup_checks() -> None:
-    if not os.getenv("SECRET_KEY"):
-        _logger.warning(
-            "SECRET_KEY not set — JWT tokens are signed with an insecure dev key. "
-            "Set SECRET_KEY before exposing this server to the internet."
-        )
+    # Resolve the signing key at boot: warns + uses an ephemeral key in dev, but
+    # raises in a non-dev APP_ENV when SECRET_KEY is unset — fail fast at startup
+    # instead of on the first login (see config.secret_key).
+    config.secret_key()
     if not os.getenv("ANTHROPIC_API_KEY"):
         _logger.warning(
             "ANTHROPIC_API_KEY not set — AI extraction will return HTTP 500. "
@@ -84,9 +83,10 @@ app.add_middleware(
 # Auth router is public (no guard) so /api/auth/login is reachable.
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
-# Every other /api/* route requires a logged-in user (valid Bearer JWT).
-app.include_router(router, prefix="/api", dependencies=[Depends(get_current_user)])
-app.include_router(archive_router, prefix="/api", dependencies=[Depends(get_current_user)])
+# Every other /api/* route requires a logged-in user (valid Bearer JWT) who has
+# already changed their initial password (must_change_password enforced here).
+app.include_router(router, prefix="/api", dependencies=[Depends(require_password_changed)])
+app.include_router(archive_router, prefix="/api", dependencies=[Depends(require_password_changed)])
 
 
 @app.get("/health")

@@ -150,6 +150,20 @@ def _cyan_bar(ws, row, n_cols, height=5):
     ws.cell(row=row, column=1).fill = PatternFill("solid", fgColor=CYAN)
 
 
+def _defang(value):
+    """Neutralise a leading '=' in supplier-derived free text so openpyxl writes
+    it as literal text, never an executable formula (=HYPERLINK/=cmd|... that would
+    run when the customer opens the file). Only '=' is neutralised: openpyxl stores
+    a leading '=' as data_type 'f' (live formula), whereas '+'/'-'/'@' are already
+    written as plain strings — defanging those would only add a visible apostrophe
+    to legitimate values like "-20% Edition" with no security benefit. Apply ONLY to
+    free-text string fields, never to the generated formula cells (vk_target).
+    """
+    if isinstance(value, str) and value.startswith("="):
+        return "'" + value
+    return value
+
+
 # ── Main builder ──────────────────────────────────────────────────────────────
 
 def build_excel(
@@ -291,14 +305,14 @@ def build_excel(
             elif field == "extra_fields":
                 raw = series.get(field)
                 value = (
-                    " | ".join(f"{k}: {v}" for k, v in raw.items() if v is not None)
+                    _defang(" | ".join(f"{k}: {v}" for k, v in raw.items() if v is not None))
                     if isinstance(raw, dict) and raw else None
                 )
             else:
                 raw = series.get(field)
                 if hasattr(raw, "item"):
                     raw = raw.item()
-                value = None if (isinstance(raw, float) and pd.isna(raw)) else raw
+                value = None if (isinstance(raw, float) and pd.isna(raw)) else _defang(raw)
 
             cell = _data_cell(ws, data_row, col_idx, value, alt)
 

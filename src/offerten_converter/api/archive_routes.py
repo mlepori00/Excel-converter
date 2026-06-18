@@ -13,8 +13,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from offerten_converter.api.auth import get_current_user
 from offerten_converter.application.ports import SpreadsheetPreviewRenderer
-from offerten_converter.domain.entities import Offer, OfferStatus
+from offerten_converter.domain.entities import Offer, OfferStatus, User
 from offerten_converter.infrastructure.db.engine import get_db
 from offerten_converter.infrastructure.excel_html_renderer import ExcelHtmlRenderer
 from offerten_converter.infrastructure.sql_offer_repo import SqlOfferRepository
@@ -206,11 +207,19 @@ def get_offer(offer_id: int, repo: SqlOfferRepository = Depends(_repo)) -> Offer
 
 @router.patch("/offers/{offer_id}/status", response_model=OfferSummaryOut)
 def set_offer_status(
-    offer_id: int, body: StatusUpdate, repo: SqlOfferRepository = Depends(_repo)
+    offer_id: int,
+    body: StatusUpdate,
+    repo: SqlOfferRepository = Depends(_repo),
+    user: User = Depends(get_current_user),
 ) -> OfferSummaryOut:
     status = _parse_status(body.status)
     if status is None:
         raise HTTPException(400, "Status fehlt")
+    offer = repo.get(offer_id)
+    if offer is None:
+        raise HTTPException(404, "Offerte nicht gefunden")
+    if offer.created_by_user_id is not None and offer.created_by_user_id != user.id:
+        raise HTTPException(403, "Nur der Ersteller kann den Status ändern")
     updated = repo.update_status(offer_id, status)
     if updated is None:
         raise HTTPException(404, "Offerte nicht gefunden")

@@ -220,6 +220,36 @@ def test_extract_raw_fallback_sends_raw_sheet_to_ai():
     assert "layout detection failed" in hints_str_arg.lower()
 
 
+def test_extract_raw_fallback_redacts_pii_in_raw_sheet():
+    """P2-4: the raw-fallback sheet sent to the AI must have its PII regex-scrubbed.
+    An e-mail in the unprocessed sheet must not reach the model verbatim."""
+    buf = BytesIO()
+    pd.DataFrame({
+        "SKU": ["www.supplier.com", "www.supplier.com"],
+        "Price EUR": ["59.90", "79.90"],
+        "Kontakt": ["sales@supplier.example", "sales@supplier.example"],
+    }).to_excel(buf, index=False)
+
+    parse_resp = client.post(
+        "/api/offer/parse",
+        files={"file": ("raw_offer.xlsx", BytesIO(buf.getvalue()), _XLSX_MIME)},
+    )
+    assert parse_resp.status_code == 200
+    assert parse_resp.json()["layout_type"] == "raw_fallback"
+    file_id = parse_resp.json()["file_id"]
+
+    mock_extract = MagicMock(return_value=([], {"input_tokens": 10, "output_tokens": 5}))
+    with patch("offerten_converter.api.routes.extract_line_items", mock_extract):
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-123"}):
+            resp = client.post("/api/offer/extract", json={"file_id": file_id})
+
+    assert resp.status_code == 200
+    sanitized_text_arg = mock_extract.call_args[0][0]
+    assert "RAW SHEET" in sanitized_text_arg
+    assert "sales@supplier.example" not in sanitized_text_arg
+    assert "[REDACTED]" in sanitized_text_arg
+
+
 def test_extract_unknown_file_id_returns_404():
     resp = client.post(
         "/api/offer/extract",

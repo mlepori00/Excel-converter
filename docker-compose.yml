@@ -10,8 +10,10 @@ services:
       - "8000:8000"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      # Signs login JWTs – set a long random value in production.
-      SECRET_KEY: ${SECRET_KEY}
+      # Production mode: a missing SECRET_KEY fails fast at app startup (see config.py).
+      APP_ENV: production
+      # Signs login JWTs – fail at compose-start if not provided (no silent fallback).
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
     volumes:
       # Persist the SQLite database (and future blobs) across redeploys.
       - offerten-data:/app/data

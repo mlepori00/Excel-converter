@@ -119,3 +119,32 @@ class TestBuildExcel:
         )
         assert f"{qty_col}7" in str(dv.sqref)
         assert f"{qty_col}8" in str(dv.sqref)
+
+    def test_supplier_formula_is_neutralised_but_legit_value_kept(self):
+        """P2-5: a supplier product name starting with '=' must be written as
+        literal text (no live formula), while a legitimate value like '-20%' is
+        left untouched (no spurious apostrophe)."""
+        df = pd.DataFrame([
+            {"product_name": '=HYPERLINK("http://evil","klick")', "qty": None,
+             "available_qty": None, "vk_unit_target": 10.0, "vk_target": None},
+            {"product_name": "-20% Edition", "qty": None,
+             "available_qty": None, "vk_unit_target": 20.0, "vk_target": None},
+        ])
+        data = build_excel(df, "Test", "T", "CHF")
+        ws = load_workbook(io.BytesIO(data))["Offerte"]
+
+        payload_cell = legit_cell = None
+        for r in range(7, 11):
+            for c in range(1, 50):
+                v = ws.cell(row=r, column=c).value
+                if isinstance(v, str) and "HYPERLINK" in v:
+                    payload_cell = ws.cell(row=r, column=c)
+                elif isinstance(v, str) and "Edition" in v:
+                    legit_cell = ws.cell(row=r, column=c)
+
+        assert payload_cell is not None
+        assert payload_cell.data_type == "s"          # string, not formula ('f')
+        assert payload_cell.value.startswith("'=")     # apostrophe-prefixed
+        assert legit_cell is not None
+        assert legit_cell.data_type == "s"
+        assert legit_cell.value == "-20% Edition"       # legit value untouched
