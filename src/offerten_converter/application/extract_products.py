@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 50  # default fallback; overridden by _calculate_chunk_size()
+
+# Large files are split into many chunks, each a separate API call. Run them
+# concurrently (bounded, to stay under provider rate limits) instead of strictly
+# sequentially — wall-clock drops roughly _MAX_CONCURRENCY-fold for big offers.
+_MAX_CONCURRENCY = 6
+# Concurrency makes transient rate-limit / 5xx errors more likely; retry briefly
+# so one hiccup doesn't fail the whole extraction.
+_MAX_RETRIES = 3
 
 # Stay well under the 8192 output token limit
 _TARGET_OUTPUT_TOKENS = 5_000
@@ -238,27 +248,68 @@ def extract_line_items(
         base_content = f"[Column hints: {column_hints}]\n\n{sanitized_text}"
 
     chunks = _split_table_into_chunks(base_content)
-    logger.info("Sending %d chunk(s) (total %d chars).", len(chunks), len(base_content))
+    n = len(chunks)
+    logger.info("Sending %d chunk(s) (total %d chars).", n, len(base_content))
 
     all_items: list[dict] = []
     total_input = 0
     total_output = 0
 
-    for i, chunk in enumerate(chunks):
-        if len(chunks) > 1:
-            chunk = f"[Part {i+1} of {len(chunks)}]\n{chunk}"
-        result = call_fn(chunk, SYSTEM_PROMPT, key)
-        # Support both old (str) and new (tuple) return format
-        if isinstance(result, tuple):
-            raw, in_tok, out_tok = result
-            total_input += in_tok
-            total_output += out_tok
-        else:
-            raw = result
-        items = _parse_response(raw)
+    # Extract chunks concurrently; results are reassembled in original order so
+    # the line-item sequence still matches the source file.
+    results: list[tuple[list[dict], int, int] | None] = [None] * n
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_MAX_CONCURRENCY, n)) as pool:
+        futures = {
+            pool.submit(_extract_one_chunk, i, chunk, n, call_fn, key): i
+            for i, chunk in enumerate(chunks)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            index, items, in_tok, out_tok = future.result()
+            results[index] = (items, in_tok, out_tok)
+            logger.info("Chunk %d/%d done: %d items.", index + 1, n, len(items))
+
+    for entry in results:
+        if entry is None:
+            continue
+        items, in_tok, out_tok = entry
         all_items.extend(items)
-        logger.info("Chunk %d: extracted %d items.", i + 1, len(items))
+        total_input += in_tok
+        total_output += out_tok
 
     logger.info("Total extracted: %d line items.", len(all_items))
     usage = {"input_tokens": total_input, "output_tokens": total_output}
     return all_items, usage
+
+
+def _extract_one_chunk(
+    index: int, chunk: str, total: int, call_fn, key: str,
+) -> tuple[int, list[dict], int, int]:
+    """Extract a single chunk (with brief retry). Returns (index, items, in_tok, out_tok).
+
+    Runs in a worker thread; keeping it side-effect-free (besides logging) makes
+    concurrent execution safe.
+    """
+    if total > 1:
+        chunk = f"[Part {index + 1} of {total}]\n{chunk}"
+
+    last_exc: Exception | None = None
+    result = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            result = call_fn(chunk, SYSTEM_PROMPT, key)
+            break
+        except RuntimeError as exc:  # transient API / rate-limit errors
+            last_exc = exc
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(1.5 * (attempt + 1))
+    if result is None:
+        raise last_exc if last_exc else RuntimeError("AI call returned no result.")
+
+    # Support both old (str) and new (tuple) return formats.
+    if isinstance(result, tuple):
+        raw, in_tok, out_tok = result
+    else:
+        raw, in_tok, out_tok = result, 0, 0
+
+    items = _parse_response(raw)
+    return index, items, in_tok, out_tok

@@ -111,7 +111,7 @@ class Offer:
 class QuotationSettings:
     """User-configurable settings for quotation generation."""
 
-    default_margin: float = 40.0
+    default_margin: float = 20.0
     default_currency: str = "CHF"
     company_name: str = ""
     valid_days: int = 30

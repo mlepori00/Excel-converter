@@ -1,5 +1,6 @@
 import type {
   AuthUser,
+  ColumnOptionsResult,
   MapColumnsResult,
   OfferDetail,
   OfferStatusValue,
@@ -122,6 +123,41 @@ export async function apiMapColumns(fileId: string): Promise<MapColumnsResult> {
   return resp.json() as Promise<MapColumnsResult>;
 }
 
+export async function apiColumnOptions(
+  fileId: string,
+  priorMapping: Record<string, string> = {}
+): Promise<ColumnOptionsResult> {
+  const resp = await fetch(`${API}/api/offer/column-options`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+    body: JSON.stringify({ file_id: fileId, prior_mapping: priorMapping }),
+  });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.json() as Promise<ColumnOptionsResult>;
+}
+
+export async function apiRemapColumns(
+  fileId: string,
+  mapping: Record<string, string>,
+  priorMapping: Record<string, string> = {}
+): Promise<MapColumnsResult> {
+  const resp = await fetch(`${API}/api/offer/remap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+    body: JSON.stringify({ file_id: fileId, mapping, prior_mapping: priorMapping }),
+  });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(_extractDetail(err));
+  }
+  return resp.json() as Promise<MapColumnsResult>;
+}
+
 export async function apiExtract(fileId: string, profileName?: string): Promise<ProductRow[]> {
   const resp = await fetch(`${API}/api/offer/extract`, {
     method: "POST",
@@ -146,7 +182,8 @@ export async function apiExport(
   edits: Record<number, RowEdit>,
   marketPrices: Record<string, number>,
   createdBy: string,
-  marke: string
+  marke: string,
+  rates: Record<string, number>
 ): Promise<{ blob: Blob; offerId: number | null }> {
   const rows = products.map((p) => {
     const edit = edits[p.row_id] ?? { ordered_qty: null, vk_manual: null, margin_pct: defaultMargin };
@@ -180,6 +217,7 @@ export async function apiExport(
       target_currency: targetCurrency,
       valid_days: 30,
       default_margin_pct: defaultMargin,
+      rates,
       rows,
     }),
   });
@@ -191,6 +229,25 @@ export async function apiExport(
   const offerIdHeader = resp.headers.get("X-Offer-Id");
   const blob = await resp.blob();
   return { blob, offerId: offerIdHeader ? Number(offerIdHeader) : null };
+}
+
+export type RatesResult = {
+  /** Exchange rates in "1 CHF = X foreign" format. */
+  rates: Record<string, number>;
+  /** ECB publication date, or null when the static fallback was used. */
+  date: string | null;
+  /** True if the live ECB feed was reached, false if static fallback. */
+  live: boolean;
+};
+
+/** Fetch reference exchange rates (live ECB, with static fallback). */
+export async function apiRates(): Promise<RatesResult> {
+  const resp = await fetch(`${API}/api/rates`, { headers: { ..._authHeader() } });
+  if (!resp.ok) {
+    handleUnauthorized(resp.status);
+    throw new Error("Wechselkurse konnten nicht geladen werden.");
+  }
+  return resp.json();
 }
 
 export type BrandSupplierIndex = {

@@ -55,6 +55,7 @@ export type ParseResult = {
   products: ProductRow[];
   api_cost_estimate_chf: number | null;
   map_columns_cost_estimate_chf: number | null;
+  extraction_diagnostics: string | null;
 };
 
 export type RowEdit = {
@@ -113,4 +114,12 @@ export type MapColumnsResult = {
   columns_mapped: number;
   unmapped_columns: string[];
   products: ProductRow[];
+};
+
+export type ColumnOption = { name: string; samples: string[] };
+
+export type ColumnOptionsResult = {
+  columns: ColumnOption[];
+  current_mapping: Record<string, string>; // {canonical_field: original_column}
+  fields: string[]; // canonical field keys, in display order
 };

@@ -1,6 +1,15 @@
 import { Combobox } from "./Combobox";
 import type { ResolveStatus } from "./Combobox";
 
+export type RateRow = {
+  /** Foreign source currency, e.g. "EUR". */
+  currency: string;
+  /** Live reference rate "1 currency = live target", or null if unavailable. */
+  live: number | null;
+  /** Currently effective value shown in the input (override, else live). */
+  value: number | null;
+};
+
 type Props = {
   supplierName: string;
   marke: string;
@@ -11,6 +20,9 @@ type Props = {
   targetCurrency: string;
   pricingMode: "margin" | "market";
   marketDiscount: number;
+  rateRows: RateRow[];
+  rateDate: string | null;
+  rateLive: boolean;
   onSupplierNameChange: (v: string) => void;
   onMarkeChange: (v: string) => void;
   onMarkeStatusChange: (s: ResolveStatus) => void;
@@ -19,6 +31,7 @@ type Props = {
   onCurrencyChange: (v: string) => void;
   onPricingModeChange: (v: "margin" | "market") => void;
   onMarketDiscountChange: (v: number) => void;
+  onRateChange: (currency: string, value: number) => void;
 };
 
 export function SettingsCard({
@@ -31,6 +44,9 @@ export function SettingsCard({
   targetCurrency,
   pricingMode,
   marketDiscount,
+  rateRows,
+  rateDate,
+  rateLive,
   onSupplierNameChange,
   onMarkeChange,
   onMarkeStatusChange,
@@ -39,6 +55,7 @@ export function SettingsCard({
   onCurrencyChange,
   onPricingModeChange,
   onMarketDiscountChange,
+  onRateChange,
 }: Props) {
   // Suppliers already used with the chosen brand are suggested first.
   const brandSuppliers = suppliersByBrand[marke.trim()] ?? [];
@@ -88,6 +105,34 @@ export function SettingsCard({
           <option>USD</option>
         </select>
       </label>
+
+      {rateRows.length > 0 && (
+        <div className="settings-field rate-field">
+          <span>Wechselkurs</span>
+          {rateRows.map((r) => (
+            <div className="rate-row" key={r.currency}>
+              <div className="rate-input">
+                <span className="rate-eq">1 {r.currency} =</span>
+                <input
+                  min={0}
+                  onChange={(e) => onRateChange(r.currency, Number(e.target.value))}
+                  step={0.0001}
+                  type="number"
+                  value={r.value ?? ""}
+                />
+                <span className="rate-eq">{targetCurrency}</span>
+              </div>
+              <small className="rate-hint">
+                {r.live != null
+                  ? `Aktueller Kurs: 1 ${r.currency} = ${r.live.toFixed(4)} ${targetCurrency}${
+                      rateLive && rateDate ? ` (Stand ${rateDate})` : " (Richtwert)"
+                    }`
+                  : "Aktueller Kurs nicht verfügbar – bitte manuell eintragen."}
+              </small>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="settings-field">
         <span>Preisberechnung</span>

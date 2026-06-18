@@ -1,7 +1,14 @@
 """Disk-based cache for extracted DataFrames.
 
-Cache key: SHA-256 of the raw file bytes → avoids re-extraction after page reload.
+Cache key: SHA-256 of the raw file bytes (+ version + selected sheet) → avoids
+re-extraction after page reload.
 Storage: ~/.offerten_converter/cache/<hash>.json  (one file per unique upload)
+
+IMPORTANT: every key is version-stamped via `_CACHE_VERSION`. Bump it whenever the
+extraction logic changes in a way that would make previously cached results wrong
+(e.g. a fixed column mapping or quantity parse) — otherwise users re-uploading the
+same file keep getting the old, stale extraction. There is deliberately no
+unversioned key: an unversioned hash would silently defeat this invalidation.
 """
 
 from __future__ import annotations
@@ -18,15 +25,16 @@ logger = logging.getLogger(__name__)
 _CACHE_DIR = Path.home() / ".offerten_converter" / "cache"
 _MAX_ENTRIES = 50  # keep at most N cache files; oldest removed first
 
+# Bump on any extraction-logic change that invalidates previously cached results.
+# v3: fixed size-matrix quantity (was the per-product Total) and European/mojibake
+#     price parsing — all v2 entries are stale.
+_CACHE_VERSION = "v3"
 
-def file_hash(file_bytes: bytes) -> str:
-    return hashlib.sha256(file_bytes).hexdigest()
 
-
-def cache_key(file_bytes: bytes, sheet_name: str | None = None, version: str = "v2") -> str:
-    """Return a stable cache key for one uploaded file and selected sheet."""
+def cache_key(file_bytes: bytes, sheet_name: str | None = None) -> str:
+    """Return a stable, version-stamped cache key for one file + selected sheet."""
     digest = hashlib.sha256()
-    digest.update(version.encode("utf-8"))
+    digest.update(_CACHE_VERSION.encode("utf-8"))
     digest.update(b"\0")
     digest.update((sheet_name or "").encode("utf-8"))
     digest.update(b"\0")

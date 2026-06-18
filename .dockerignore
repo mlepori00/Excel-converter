@@ -9,6 +9,5 @@ frontend/dist/
 frontend/.env
 .env
 tests/
-demo/
 scrapling_test/
 *.md

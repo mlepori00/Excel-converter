@@ -59,13 +59,15 @@ _CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
         "cost", "cost price", "costs", "unit cost",
         "ek/stk", "ek stk", "ek pro stk", "ek/stück", "ek stück",
         "einkaufspreis", "nettopreis",
+        "coste", "precio", "prezzo", "prix",
     ),
     "currency": ("currency", "währung", "waehrung"),
     "discount_pct": ("retail discount %", "discount", "rabatt"),
 }
 
 _PRICE_FALLBACK_ALIASES = (
-    "retail price", "retail price eur€", "retail price eur"
+    "retail price", "retail price eur€", "retail price eur", "rrp", "uvp",
+    "srp", "msrp", "list price",
 )
 
 
@@ -209,12 +211,20 @@ def read_offer_file(
             if not (str(c).startswith("Unnamed:") and df[c].isna().all())
         ]]
 
+        # Snapshot before any transformation. Used by the safety net below.
+        df_initial = df.copy()
+
         size_cols, other_cols = _detect_size_columns(df)
         was_unpivoted = False
         unpivot_info = ""
-        if size_cols:
+        # Unpivot first, then accept the result only if it kept any rows. A blank
+        # size grid (e.g. an unfilled order form) would otherwise be filtered to
+        # zero rows, destroying the real flat data for every downstream path. In
+        # that case we keep the original rows and read the file as flat instead.
+        melted = _unpivot_sizes(df, size_cols, other_cols) if size_cols else None
+        if melted is not None and not melted.empty:
             original_rows = len(df)
-            df = _unpivot_sizes(df, size_cols, other_cols)
+            df = melted
             was_unpivoted = True
             unpivot_info = (
                 f"Grössen-Spalten erkannt ({len(size_cols)} Grössen: "
@@ -223,10 +233,36 @@ def read_offer_file(
             )
             metadata_hints["layout_type"] = "size_matrix_columns"
         else:
+            if size_cols:
+                # Size-matrix headers were detected but the grid held no quantities
+                # (e.g. an unfilled order form). Drop those empty size columns: they
+                # carry no product data, would clutter the flat table, and — being
+                # numeric headers read as ints — otherwise break downstream code that
+                # rebuilds column names via str(c) and re-indexes the frame.
+                df = df.drop(columns=[c for c in size_cols if c in df.columns])
             metadata_hints["layout_type"] = "flat_variant_rows"
 
         df, mapping = _add_canonical_columns(df)
         df = _drop_non_product_rows(df)
+
+        # Safety net: if all heuristics produced 0 rows but the sheet had data,
+        # return the minimally-processed snapshot so downstream paths (especially
+        # AI extraction) still have something to work with.
+        if df.empty and not df_initial.empty:
+            metadata_hints["layout_type"] = "raw_fallback"
+            metadata_hints["was_raw_fallback"] = True
+            logger.warning(
+                "All heuristics produced 0 rows (sheet had %d rows); "
+                "returning raw fallback.",
+                len(df_initial),
+            )
+            return ReadResult(
+                df=df_initial,
+                metadata_hints=metadata_hints,
+                was_unpivoted=False,
+                unpivot_info="",
+            )
+
         if mapping:
             metadata_hints["column_mapping"] = mapping
 
@@ -295,6 +331,79 @@ def _parse_price_from_text(value: object) -> str | None:
     if not match:
         return None
     return match.group(1).replace(",", ".")
+
+
+def _to_float_loose(value: object) -> float | None:
+    """Parse a number out of a messy cell (currency symbols, thousands, EU/US decimals).
+
+    Used only to decide whether a column *looks* like prices, so it is permissive:
+    "EUR 89.90", "89,90 €", "1'234.50", "1.234,50" all parse. Returns None otherwise.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = re.sub(r"(?i)\b(?:eur|chf|usd|gbp)\b|[€$£]", "", text).strip()
+    text = text.replace("'", "").replace(" ", "")
+    if not text:
+        return None
+    if "," in text and "." in text:
+        # The right-most separator is the decimal point.
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        # Comma is a decimal sep only when 1-2 digits follow; otherwise thousands.
+        text = text.replace(",", ".") if re.search(r",\d{1,2}$", text) else text.replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _column_has_numeric_values(series: pd.Series, min_fraction: float = 0.5) -> bool:
+    """True if at least *min_fraction* of the column's non-empty cells parse as numbers."""
+    cells = series.dropna().astype(str).str.strip()
+    cells = cells[~cells.str.lower().isin(["", "nan", "none"])]
+    if cells.empty:
+        return False
+    numeric = cells.map(lambda v: _to_float_loose(v) is not None)
+    return bool(numeric.mean() >= min_fraction)
+
+
+def _resolve_unit_price(
+    df: pd.DataFrame, mapping: dict[str, str], already_used: set[str]
+) -> pd.DataFrame:
+    """Pick the price column by *content*, not just by name.
+
+    Among all price-like columns (trade prices first, then retail/RRP), prefer the
+    first one that actually contains numeric values. This stops an empty but
+    well-named column (e.g. "Deal") from blocking a populated one (e.g. "RRP").
+    """
+    if "unit_price" in df.columns:
+        mapping.setdefault("unit_price", "unit_price")
+        return df
+
+    trade = [
+        c for c in df.columns
+        if c not in already_used and _matches_alias(c, _CANONICAL_ALIASES["unit_price"])
+    ]
+    retail = [
+        c for c in df.columns
+        if c not in already_used and c not in trade
+        and _matches_alias(c, _PRICE_FALLBACK_ALIASES)
+    ]
+    ordered = trade + retail
+    if not ordered:
+        return df
+
+    with_values = [c for c in ordered if _column_has_numeric_values(df[c])]
+    chosen = with_values[0] if with_values else ordered[0]
+
+    df["unit_price"] = df[chosen]
+    label = f"{chosen} (rrp/retail)" if chosen in retail else str(chosen)
+    mapping["unit_price"] = label
+    return df
 
 
 def _drop_non_product_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -385,6 +494,9 @@ def _add_canonical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, st
     col_lower = {str(c).strip().lower(): c for c in df.columns}
 
     for canonical, aliases in _CANONICAL_ALIASES.items():
+        # unit_price is resolved separately (value-aware) after the name-based pass.
+        if canonical == "unit_price":
+            continue
         if canonical in df.columns:
             mapping.setdefault(canonical, canonical)
             continue
@@ -423,11 +535,9 @@ def _add_canonical_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, st
                 df["product_name"] = df[best_col]
                 mapping["product_name"] = str(best_col)
 
-    if "unit_price" not in df.columns:
-        fallback = _find_column(df, _PRICE_FALLBACK_ALIASES)
-        if fallback is not None:
-            df["unit_price"] = df[fallback]
-            mapping["unit_price"] = str(fallback)
+    already_used = set(mapping.values()) | {"_size_from_col", "_qty_from_col"}
+    df = _resolve_unit_price(df, mapping, already_used)
+
     extra_source = _find_column(df, ("zusatzinfos", "extra fields", "extra_fields", "notes"))
     if extra_source is not None:
         parsed_prices = df[extra_source].map(_parse_price_from_text)

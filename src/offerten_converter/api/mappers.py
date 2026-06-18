@@ -19,6 +19,7 @@ from offerten_converter.api.schemas import (
     WorkflowStep,
     WorkflowStepInfo,
 )
+from offerten_converter.domain.parsing import parse_decimal
 
 
 def _clean_scalar(value: Any) -> Any:
@@ -39,23 +40,12 @@ def _clean_scalar(value: Any) -> Any:
 
 
 def _to_float(value: Any) -> float | None:
-    value = _clean_scalar(value)
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    return parse_decimal(_clean_scalar(value))
 
 
 def _to_int(value: Any) -> int | None:
-    value = _clean_scalar(value)
-    if value is None:
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
+    parsed = parse_decimal(_clean_scalar(value))
+    return int(parsed) if parsed is not None else None
 
 
 def build_workflow_steps(

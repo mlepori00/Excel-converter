@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 DEFAULT_RATES: dict[str, float] = {
-    # All rates relative to CHF (1 CHF = X foreign currency)
+    # All rates relative to CHF (1 CHF = X foreign currency).
+    # Only used as a fallback when live ECB rates are unavailable.
     "CHF": 1.0,
-    "EUR": 0.955,
+    "EUR": 1.047,  # 1 EUR ≈ 0.955 CHF (EUR is weaker than CHF)
     "USD": 1.09,
     "GBP": 0.825,
     "SEK": 11.80,

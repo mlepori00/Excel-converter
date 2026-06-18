@@ -3,6 +3,19 @@
 import pandas as pd
 import pytest
 
+from offerten_converter.infrastructure import extraction_cache
+
+
+@pytest.fixture(autouse=True)
+def _isolated_extraction_cache(tmp_path, monkeypatch):
+    """Redirect the disk-based extraction cache away from the real user cache.
+
+    Without this, route tests that upload files write their (often mocked)
+    extraction results into ~/.offerten_converter/cache, poisoning the cache
+    for real uploads of the same file.
+    """
+    monkeypatch.setattr(extraction_cache, "_CACHE_DIR", tmp_path / "extraction_cache")
+
 
 @pytest.fixture
 def sample_line_items_df():

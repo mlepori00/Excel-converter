@@ -14,8 +14,10 @@ class TestConvertToTarget:
     """convert_to_target returns (amount, unknown_currency_flag)."""
 
     def test_eur_to_chf(self):
+        # EUR is weaker than CHF: 1 EUR ≈ 0.955 CHF (rate stored as 1 CHF = 1.047 EUR).
         result, unknown = convert_to_target(10.0, "EUR", "CHF")
-        assert result == pytest.approx(10.0 / 0.955, rel=1e-4)
+        assert result == pytest.approx(10.0 / 1.047, rel=1e-4)
+        assert result < 10.0  # 10 EUR must be worth less than 10 CHF
         assert unknown is False
 
     def test_same_currency(self):
@@ -31,7 +33,7 @@ class TestConvertToTarget:
     def test_usd_to_eur(self):
         result, unknown = convert_to_target(10.0, "USD", "EUR")
         chf = 10.0 / 1.09
-        expected = chf * 0.955
+        expected = chf * 1.047
         assert result == pytest.approx(expected, rel=1e-4)
         assert unknown is False
 

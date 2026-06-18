@@ -66,7 +66,10 @@ export function InfoCard({
       : "Ausstehend"
     : "—";
 
-  const showExtractBtn = needsAiExtraction || parseResult?.extraction_mode === "local" || parseResult?.extraction_mode === "cache";
+  // AI extraction is the backup path: prominent only when the local
+  // heuristic found nothing; otherwise a quiet redo link suffices.
+  const extractionSucceeded =
+    parseResult?.extraction_mode === "local" || parseResult?.extraction_mode === "cache";
   const showCache = parseResult?.extraction_mode === "cache";
 
   return (
@@ -92,22 +95,44 @@ export function InfoCard({
 
       {(error || mappingError) && <p className="parse-error">{error || mappingError}</p>}
 
-      {parseResult && showExtractBtn && (
-        <div className="action-row">
-          <button
-            className="action-btn action-btn--primary"
-            disabled={isBusy}
-            onClick={needsAiExtraction ? onExtract : onForceExtract}
-            type="button"
-          >
-            {isLoading ? "Extrahiert …" : "Mit Claude extrahieren"}
-          </button>
-          {parseResult.api_cost_estimate_chf != null && (
-            <span className="action-cost">
-              ~ CHF {parseResult.api_cost_estimate_chf.toFixed(2)}
-            </span>
+      {parseResult && needsAiExtraction && (
+        <>
+          {parseResult.extraction_diagnostics && (
+            <p className="extraction-diagnostics">{parseResult.extraction_diagnostics}</p>
           )}
-        </div>
+          <div className="action-row">
+            <button
+              className="action-btn action-btn--primary"
+              disabled={isBusy}
+              onClick={onExtract}
+              type="button"
+            >
+              {isLoading ? "Extrahiert …" : "Mit Claude extrahieren"}
+            </button>
+            {parseResult.api_cost_estimate_chf != null && (
+              <span className="action-cost">
+                ~ CHF {parseResult.api_cost_estimate_chf.toFixed(2)}
+              </span>
+            )}
+          </div>
+        </>
+      )}
+
+      {parseResult && extractionSucceeded && !needsAiExtraction && (
+        <button
+          className="reparse-button"
+          disabled={isBusy}
+          onClick={onForceExtract}
+          type="button"
+        >
+          {isLoading
+            ? "Extrahiert …"
+            : `Mit KI neu extrahieren${
+                parseResult.api_cost_estimate_chf != null
+                  ? ` (~ CHF ${parseResult.api_cost_estimate_chf.toFixed(2)})`
+                  : ""
+              }`}
+        </button>
       )}
 
       {showCache && !isBusy && (

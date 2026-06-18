@@ -33,7 +33,7 @@ def test_supplier_profile_defaults():
 
 def test_quotation_settings_defaults():
     settings = QuotationSettings()
-    assert settings.default_margin == 40.0
+    assert settings.default_margin == 20.0
     assert settings.default_currency == "CHF"
     assert settings.valid_days == 30
     assert settings.rates == {}

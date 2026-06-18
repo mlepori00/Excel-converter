@@ -6,6 +6,7 @@ import logging
 
 import pandas as pd
 
+from offerten_converter.domain.parsing import parse_decimal
 from offerten_converter.domain.pricing import (
     DEFAULT_RATES,
     actual_margin,
@@ -19,21 +20,8 @@ logger = logging.getLogger(__name__)
 
 def _parse_positive_float(value) -> float | None:
     """Return a positive finite float, or None for blank/NaN/invalid values."""
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        parsed = float(text)
-    except (ValueError, TypeError):
-        return None
-    if pd.isna(parsed) or parsed <= 0:
+    parsed = parse_decimal(value)
+    if parsed is None or parsed <= 0:
         return None
     return parsed
 
@@ -68,15 +56,12 @@ def enrich_dataframe(
         disc_pct = row.get("discount_pct") or 0
         ordered_qty = row.get("ordered_qty")
 
-        try:
-            price_f = float(price) if price is not None and str(price).strip() != "" else None
-        except (ValueError, TypeError):
-            price_f = None
+        price_f = parse_decimal(price)
+        if price_f is None and price is not None and str(price).strip() != "":
             logger.warning("Could not parse unit_price %r – row will have no EK.", price)
 
-        try:
-            disc_f = float(disc_pct) if disc_pct is not None else 0.0
-        except (ValueError, TypeError):
+        disc_f = parse_decimal(disc_pct)
+        if disc_f is None:
             disc_f = 0.0
 
         qty_fallback_used = False

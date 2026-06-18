@@ -33,3 +33,28 @@ class TestExtractProducts:
         items, _usage = extract_line_items("data", api_key="sk-test", call_fn=mock_partial)
         assert items[0]["ean"] is None
         assert items[0]["unit_price"] is None
+
+    def test_multichunk_preserves_order_and_sums_tokens(self):
+        """Concurrent chunk extraction must keep source order and total tokens."""
+        import re
+
+        header = "sku  name  price"
+        rows = "\n".join(f"S{i:04d}  Item{i}  9.99" for i in range(400))
+        text = header + "\n" + rows
+
+        parts_seen = []
+
+        def mock(content, prompt, key):
+            m = re.search(r"\[Part (\d+) of (\d+)\]", content)
+            part = int(m.group(1)) if m else 1
+            parts_seen.append(part)
+            # One item per chunk, tagged with the chunk's part number.
+            return (f'[{{"sku": "PART-{part:03d}", "currency": "EUR"}}]', 10, 20)
+
+        items, usage = extract_line_items(text, api_key="sk-test", call_fn=mock)
+
+        assert len(parts_seen) > 1  # actually split into multiple chunks
+        skus = [it["sku"] for it in items]
+        assert skus == sorted(skus)  # reassembled in original chunk order
+        assert usage["input_tokens"] == 10 * len(parts_seen)
+        assert usage["output_tokens"] == 20 * len(parts_seen)

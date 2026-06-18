@@ -6,12 +6,14 @@ These routes only marshal HTTP ↔ domain objects.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -19,6 +21,8 @@ from sqlalchemy.orm import Session
 from offerten_converter.api import file_store
 from offerten_converter.api.auth import get_current_user
 from offerten_converter.api.mappers import (
+    _to_float,
+    _to_int,
     dataframe_to_product_rows,
 )
 from offerten_converter.application.calculate_prices import enrich_dataframe
@@ -31,11 +35,13 @@ from offerten_converter.domain.pricing import DEFAULT_RATES
 from offerten_converter.infrastructure import extraction_cache
 from offerten_converter.infrastructure.ai_extractors import get_call_fn
 from offerten_converter.infrastructure.column_mapper import (
+    CANONICAL_FIELDS,
     apply_mapping,
     estimate_cost_chf,
     map_columns,
 )
 from offerten_converter.infrastructure.db.engine import get_db
+from offerten_converter.infrastructure.ecb_rates import fetch_ecb_rates
 from offerten_converter.infrastructure.excel_reader import (
     get_recommended_sheet_name,
     get_sheet_names,
@@ -81,6 +87,7 @@ class ParseResponse(BaseModel):
     products: list[dict]          # ProductRow dicts
     api_cost_estimate_chf: float | None
     map_columns_cost_estimate_chf: float | None
+    extraction_diagnostics: str | None = None  # why mode=none; null otherwise
 
 
 class MapColumnsRequest(BaseModel):
@@ -93,6 +100,26 @@ class MapColumnsResponse(BaseModel):
     columns_mapped: int
     unmapped_columns: list[str]     # original column names not assigned to any field
     products: list[dict]
+
+
+class ColumnOptionsResponse(BaseModel):
+    columns: list[dict]             # [{"name": str, "samples": list[str]}]
+    current_mapping: dict[str, str] # {canonical_field: original_column} pre-fill
+    fields: list[str]               # canonical field keys, in display order
+
+
+class ColumnOptionsRequest(BaseModel):
+    file_id: str
+    # The mapping currently applied to the products on screen (e.g. from the AI
+    # column mapper). Used to pre-fill the manual dialog so fields the heuristic
+    # alone could not resolve are not silently dropped.
+    prior_mapping: dict[str, str] = {}
+
+
+class RemapRequest(BaseModel):
+    file_id: str
+    mapping: dict[str, str]         # {canonical_field: original_column}; "" = unset
+    prior_mapping: dict[str, str] = {}  # currently-applied mapping to build upon
 
 
 class ExtractRequest(BaseModel):
@@ -125,7 +152,7 @@ class ExportRowIn(BaseModel):
     available_qty: float | None = None
     ordered_qty: float | None = None
     vk_manual: float | None = None
-    margin_pct: float = 40.0
+    margin_pct: float = 20.0
     market_price: float | None = None
 
 
@@ -136,7 +163,7 @@ class ExportRequest(BaseModel):
     created_by: str = "AMP Sport GmbH"
     target_currency: str = "CHF"
     valid_days: int = 30
-    default_margin_pct: float = 40.0
+    default_margin_pct: float = 20.0
     rates: dict[str, float] | None = None
     rows: list[ExportRowIn]
 
@@ -173,7 +200,7 @@ def _try_local_or_cache(
     if not force:
         for key in [
             extraction_cache.cache_key(file_bytes, source_sheet),
-            extraction_cache.file_hash(file_bytes),
+            extraction_cache.cache_key(file_bytes),
         ]:
             cached = extraction_cache.load(key)
             if cached is not None and not cached.empty:
@@ -183,7 +210,7 @@ def _try_local_or_cache(
     if local is not None:
         local = _enforce_import_truth(local, result.df)
         extraction_cache.save(extraction_cache.cache_key(file_bytes, source_sheet), local)
-        extraction_cache.save(extraction_cache.file_hash(file_bytes), local)
+        extraction_cache.save(extraction_cache.cache_key(file_bytes), local)
         return local, "local"
 
     return None, "none"
@@ -199,6 +226,35 @@ _LOCAL_COLS = [
 def _has_values(series: pd.Series) -> bool:
     vals = series.dropna().astype(str).str.strip()
     return not vals[~vals.str.lower().isin(["", "nan", "none"])].empty
+
+
+def _build_extraction_diagnostics(result: Any) -> str | None:
+    """Human-readable explanation of why local extraction produced nothing."""
+    if result.metadata_hints.get("was_raw_fallback"):
+        return (
+            "Dateistruktur konnte nicht erkannt werden – "
+            "Spalten manuell zuordnen oder KI verwenden."
+        )
+    df = result.df
+    if df.empty:
+        return "Keine Zeilen im Sheet erkannt."
+    has_identity = any(
+        col in df.columns and _has_values(df[col])
+        for col in ("product_name", "sku", "ean")
+    )
+    has_price = "unit_price" in df.columns and _has_values(df["unit_price"])
+    has_variant = any(
+        col in df.columns and _has_values(df[col])
+        for col in ("size", "color", "available_qty")
+    )
+    issues = []
+    if not has_price:
+        issues.append("Kein Preisfeld erkannt")
+    if not has_identity:
+        issues.append("Keine Produkt-Identifier (SKU/EAN/Name)")
+    if not has_variant:
+        issues.append("Keine Varianten-Info (Grösse/Farbe/Menge)")
+    return " · ".join(issues) if issues else None
 
 
 def _build_local_extraction(result: Any) -> pd.DataFrame | None:
@@ -266,6 +322,61 @@ def _enforce_import_truth(extracted: pd.DataFrame, import_df: pd.DataFrame) -> p
         if col in src.columns and _has_values(src[col]):
             df[col] = src[col].values
     return df
+
+
+def _sample_values(series: Any, n: int = 3) -> list[str]:
+    """Return up to *n* distinct non-empty sample values from a column."""
+    vals = series.dropna().astype(str).str.strip()
+    vals = vals[~vals.str.lower().isin(["", "nan", "none"])]
+    seen: list[str] = []
+    for v in vals.tolist():
+        if v not in seen:
+            seen.append(v)
+        if len(seen) >= n:
+            break
+    return seen
+
+
+def _raw_source(label: str) -> str:
+    """Strip resolver annotations to recover the underlying column name.
+
+    e.g. "RRP (rrp/retail)" -> "RRP"; "EK/Stk + Zusatzinfos (rrp)" -> "EK/Stk".
+    """
+    return str(label).split(" + ")[0].split(" (")[0].strip()
+
+
+def _read_for_mapping(
+    file_bytes: bytes,
+    filename: str,
+    prior: dict[str, str] | None = None,
+) -> tuple[Any, list[str], dict[str, str]]:
+    """Read a file and return (result, original_columns, current_mapping).
+
+    original_columns = the real supplier headers (heuristic-added canonical columns
+    excluded). current_mapping = {canonical: original_column} the heuristic resolved,
+    limited to those pointing at a selectable original column (for UI pre-fill).
+
+    *prior* is the mapping currently applied to the on-screen products (e.g. fields
+    the AI column mapper resolved that the heuristic alone missed). It is merged on
+    top of the heuristic result so the manual flow builds on what is already there
+    instead of silently dropping AI-only mappings such as the SKU column.
+    """
+    result, _, _ = _parse_file(file_bytes, filename, None)
+    heuristic_mapping = result.metadata_hints.get("column_mapping", {})
+    heuristic_added = {
+        canonical for canonical, original in heuristic_mapping.items()
+        if canonical != original
+    }
+    original_cols = [
+        str(c) for c in result.df.columns
+        if not str(c).startswith("_") and str(c) not in heuristic_added
+    ]
+    current: dict[str, str] = {}
+    for canonical, label in {**heuristic_mapping, **(prior or {})}.items():
+        raw = _raw_source(label)
+        if raw in original_cols:
+            current[canonical] = raw
+    return result, original_cols, current
 
 
 def _map_columns_cost(result: Any) -> float:
@@ -341,6 +452,7 @@ async def parse_offer(
     cost = _api_cost_estimate(sanitized_text)
 
     hints = result.metadata_hints
+    diagnostics = _build_extraction_diagnostics(result) if mode == "none" else None
     return ParseResponse(
         file_id=file_id,
         filename=filename,
@@ -357,6 +469,7 @@ async def parse_offer(
         products=products,
         api_cost_estimate_chf=cost,
         map_columns_cost_estimate_chf=_map_columns_cost(result),
+        extraction_diagnostics=diagnostics,
     )
 
 
@@ -407,12 +520,88 @@ async def map_offer_columns(body: MapColumnsRequest) -> MapColumnsResponse:
         products_df = _enforce_import_truth(products_df, result.df)
         source_sheet = result.metadata_hints.get("source_sheet")
         extraction_cache.save(extraction_cache.cache_key(file_bytes, source_sheet), products_df)
-        extraction_cache.save(extraction_cache.file_hash(file_bytes), products_df)
+        extraction_cache.save(extraction_cache.cache_key(file_bytes), products_df)
         products = [_row_to_dict(row) for row in dataframe_to_product_rows(products_df)]
 
     return MapColumnsResponse(
         mapped_fields=applied,
         columns_total=n_total,
+        columns_mapped=len(applied),
+        unmapped_columns=unmapped,
+        products=products,
+    )
+
+
+@router.post("/offer/column-options", response_model=ColumnOptionsResponse)
+async def offer_column_options(body: ColumnOptionsRequest) -> ColumnOptionsResponse:
+    """Columns + sample values + current mapping (heuristic + prior) for the manual UI."""
+    entry = file_store.get(body.file_id)
+    if entry is None:
+        raise HTTPException(404, "Datei nicht gefunden oder abgelaufen. Bitte erneut hochladen.")
+
+    file_bytes, filename = entry
+    result, original_cols, current = _read_for_mapping(file_bytes, filename, body.prior_mapping)
+    columns = [
+        {"name": c, "samples": _sample_values(result.df[c])} for c in original_cols
+    ]
+    return ColumnOptionsResponse(
+        columns=columns, current_mapping=current, fields=list(CANONICAL_FIELDS),
+    )
+
+
+@router.post("/offer/remap", response_model=MapColumnsResponse)
+async def offer_remap(body: RemapRequest) -> MapColumnsResponse:
+    """Apply a user-supplied column mapping and re-run local extraction (no AI).
+
+    Only fields present in the request are touched: a non-empty value overrides the
+    heuristic, an empty value clears a previously selectable mapping. Auto-derived
+    columns (e.g. size from a size-matrix) are left intact when untouched.
+    """
+    entry = file_store.get(body.file_id)
+    if entry is None:
+        raise HTTPException(404, "Datei nicht gefunden oder abgelaufen. Bitte erneut hochladen.")
+
+    file_bytes, filename = entry
+    result, original_cols, current = _read_for_mapping(file_bytes, filename, body.prior_mapping)
+    df = result.df
+
+    # Materialize the base mapping (heuristic + prior) onto the DataFrame so fields
+    # only the AI mapper resolved (e.g. SKU) survive even when the user only edits
+    # an unrelated field in the manual dialog.
+    for canonical, src in current.items():
+        if src in df.columns and canonical not in df.columns:
+            df[canonical] = df[src]
+    applied = dict(current)
+
+    for canonical in CANONICAL_FIELDS:
+        if canonical not in body.mapping:
+            continue
+        src = (body.mapping.get(canonical) or "").strip()
+        if src and src in df.columns:
+            df[canonical] = df[src]
+            applied[canonical] = src
+        elif not src:
+            applied.pop(canonical, None)
+            if canonical in df.columns:
+                df = df.drop(columns=[canonical])
+
+    result.df = df
+    result.metadata_hints["column_mapping"] = applied
+
+    products_df = _build_local_extraction(result)
+    products: list[dict] = []
+    if products_df is not None:
+        products_df = _enforce_import_truth(products_df, result.df)
+        source_sheet = result.metadata_hints.get("source_sheet")
+        extraction_cache.save(extraction_cache.cache_key(file_bytes, source_sheet), products_df)
+        extraction_cache.save(extraction_cache.cache_key(file_bytes), products_df)
+        products = [_row_to_dict(row) for row in dataframe_to_product_rows(products_df)]
+
+    mapped_originals = set(applied.values())
+    unmapped = [c for c in original_cols if c not in mapped_originals]
+    return MapColumnsResponse(
+        mapped_fields=applied,
+        columns_total=len(original_cols),
         columns_mapped=len(applied),
         unmapped_columns=unmapped,
         products=products,
@@ -435,15 +624,35 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
         raise HTTPException(500, "ANTHROPIC_API_KEY nicht gesetzt.")
 
     result, _, _ = _parse_file(file_bytes, filename, body.sheet_name)
+    is_raw_fallback = result.metadata_hints.get("was_raw_fallback", False)
 
     col_mapping = map_columns(result.df, api_key)
     if col_mapping:
         result.df, applied = apply_mapping(result.df, col_mapping)
         result.metadata_hints["column_mapping"] = applied
 
-    df_raw = result.df
-    df_clean, _ = sanitize_dataframe(df_raw)
+    df_view = result.df
+    df_clean, _ = sanitize_dataframe(df_view)
     sanitized_text = df_clean.to_string(index=False)
+
+    # When the reader fell back to raw data (all heuristics produced 0 rows),
+    # also include the truly unprocessed sheet so the AI sees the original layout
+    # and is not misled by heuristic column names that may be wrong.
+    if is_raw_fallback:
+        source_sheet = result.metadata_hints.get("source_sheet")
+        try:
+            xl_raw = pd.ExcelFile(io.BytesIO(file_bytes))
+            _sheet = source_sheet or xl_raw.sheet_names[0]
+            df_truly_raw = xl_raw.parse(_sheet, header=None, dtype=str, nrows=100)
+            raw_text = df_truly_raw.fillna("").to_string(index=False, header=False)
+            sanitized_text = (
+                "=== RAW SHEET (first 100 rows, no header processing) ===\n"
+                + raw_text
+                + "\n\n=== PROCESSED VIEW ===\n"
+                + sanitized_text
+            )
+        except Exception:
+            pass  # raw sheet unavailable; proceed with processed view only
 
     hint_parts: list[str] = []
     if body.profile_name:
@@ -452,6 +661,13 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
             hint_parts.append(profile_to_hints(profile))
     if result.metadata_hints.get("layout_type"):
         hint_parts.append(f"Detected offer layout: {result.metadata_hints['layout_type']}.")
+    if is_raw_fallback:
+        hint_parts.append(
+            "Automatic layout detection failed. "
+            "The table shows raw unprocessed sheet data. "
+            "Column names may be incorrect or absent. "
+            "Extract all identifiable product records regardless of missing fields."
+        )
     if result.was_unpivoted:
         hint_parts.append(
             "Data was unpivoted: '_size_from_col' = size, "
@@ -463,8 +679,10 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
     hints_str = " | ".join(hint_parts)
 
     try:
-        items, usage = extract_line_items(
-            sanitized_text, hints_str, api_key, call_fn=get_call_fn(api_key)
+        # extract_line_items is blocking (many API calls); run it off the event
+        # loop so other requests stay responsive during a large extraction.
+        items, usage = await run_in_threadpool(
+            extract_line_items, sanitized_text, hints_str, api_key, get_call_fn(api_key)
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(502, f"AI-Extraktion fehlgeschlagen: {exc}") from exc
@@ -474,7 +692,7 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
 
     source_sheet = result.metadata_hints.get("source_sheet")
     extraction_cache.save(extraction_cache.cache_key(file_bytes, source_sheet), df_extracted)
-    extraction_cache.save(extraction_cache.file_hash(file_bytes), df_extracted)
+    extraction_cache.save(extraction_cache.cache_key(file_bytes), df_extracted)
 
     products = [_row_to_dict(row) for row in dataframe_to_product_rows(df_extracted)]
     return ExtractResponse(
@@ -483,24 +701,6 @@ async def extract_products(body: ExtractRequest) -> ExtractResponse:
         input_tokens=usage.get("input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0),
     )
-
-
-def _to_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _offer_lines_from_df(df: pd.DataFrame) -> list[OfferLine]:
@@ -699,6 +899,22 @@ async def stream_market_prices(body: MarketPriceRequest):
 # ---------------------------------------------------------------------------
 # Profile endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/rates")
+def get_rates() -> dict:
+    """Return exchange rates (format: 1 CHF = X foreign) plus a freshness marker.
+
+    Tries the live ECB daily feed first; on any failure falls back to the static
+    DEFAULT_RATES so the create flow always has something to display. The static
+    rates are merged underneath the live ones, so currencies missing from the ECB
+    feed still resolve.
+    """
+    live = fetch_ecb_rates()
+    if live is not None:
+        rates, date_str = live
+        return {"rates": {**DEFAULT_RATES, **rates}, "date": date_str, "live": True}
+    return {"rates": dict(DEFAULT_RATES), "date": None, "live": False}
+
 
 @router.get("/profiles")
 def list_profiles() -> list[str]:

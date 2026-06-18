@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ArchiveView } from "./components/ArchiveView";
 import { ChangePasswordScreen } from "./components/ChangePasswordScreen";
+import { ColumnMappingModal } from "./components/ColumnMappingModal";
 import { ExportFab } from "./components/ExportFab";
 import { FlowSteps } from "./components/FlowSteps";
 import { HeaderCard } from "./components/HeaderCard";
@@ -13,10 +14,13 @@ import { ProductTable } from "./components/ProductTable";
 import { SettingsCard } from "./components/SettingsCard";
 import {
   apiBrandSupplierIndex,
+  apiColumnOptions,
   apiExport,
   apiExtract,
   apiMapColumns,
   apiParse,
+  apiRates,
+  apiRemapColumns,
   downloadBlob,
   handleUnauthorized,
   inferSupplierName,
@@ -26,6 +30,7 @@ import {
 import type { ResolveStatus } from "./components/Combobox";
 import type {
   AuthUser,
+  ColumnOptionsResult,
   ExportSummary,
   MapColumnsResult,
   ParseResult,
@@ -38,6 +43,16 @@ type AppProps = {
   user: AuthUser;
   onLogout: () => void;
 };
+
+// The margin a user sets is remembered across sessions (per browser).
+const MARGIN_STORAGE_KEY = "oc_default_margin";
+const FALLBACK_MARGIN = 20;
+
+function loadStoredMargin(): number {
+  if (typeof localStorage === "undefined") return FALLBACK_MARGIN;
+  const parsed = Number(localStorage.getItem(MARGIN_STORAGE_KEY));
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 99 ? parsed : FALLBACK_MARGIN;
+}
 
 export default function App({ user, onLogout }: AppProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -62,8 +77,14 @@ export default function App({ user, onLogout }: AppProps) {
   const [suppliersByBrand, setSuppliersByBrand] = useState<Record<string, string[]>>({});
   const [markeStatus, setMarkeStatus] = useState<ResolveStatus>("empty");
   const [supplierStatus, setSupplierStatus] = useState<ResolveStatus>("empty");
-  const [margin, setMargin] = useState(40);
+  const [margin, setMargin] = useState(loadStoredMargin);
   const [targetCurrency, setTargetCurrency] = useState("CHF");
+  // Reference exchange rates (live ECB, "1 CHF = X foreign"); fallback is static.
+  const [liveRates, setLiveRates] = useState<Record<string, number>>({});
+  const [rateDate, setRateDate] = useState<string | null>(null);
+  const [rateLive, setRateLive] = useState(true);
+  // Per-offer manual overrides: "1 <source> = <value> <targetCurrency>". Not persisted.
+  const [rateOverrides, setRateOverrides] = useState<Record<string, number>>({});
   const [marketPrices, setMarketPrices] = useState<Record<string, number>>({});
   const [scrapingStatus, setScrapingStatus] = useState("");
   const [scrapingProgress, setScrapingProgress] = useState<{ done: number; total: number } | null>(null);
@@ -81,6 +102,12 @@ export default function App({ user, onLogout }: AppProps) {
   const [isMappingColumns, setIsMappingColumns] = useState(false);
   const [columnMappingResult, setColumnMappingResult] = useState<MapColumnsResult | null>(null);
   const [mappingError, setMappingError] = useState("");
+
+  // Manual column-mapping modal (no AI).
+  const [showMapping, setShowMapping] = useState(false);
+  const [mappingOptions, setMappingOptions] = useState<ColumnOptionsResult | null>(null);
+  const [mappingOptionsLoading, setMappingOptionsLoading] = useState(false);
+  const [isRemapping, setIsRemapping] = useState(false);
 
   const needsAiExtraction =
     parseResult !== null && parseResult.extraction_mode === "none" && products.length === 0;
@@ -103,6 +130,13 @@ export default function App({ user, onLogout }: AppProps) {
     supplierStatus !== "unconfirmed";
   const currentStep = !hasFile ? 1 : products.length === 0 ? 2 : !offerComplete ? 3 : 4;
 
+  function handleMarginChange(value: number) {
+    setMargin(value);
+    if (typeof localStorage !== "undefined" && Number.isFinite(value) && value > 0 && value <= 99) {
+      localStorage.setItem(MARGIN_STORAGE_KEY, String(value));
+    }
+  }
+
   // Load the brand/supplier suggestion index for the create flow.
   function loadBrandSupplierIndex() {
     apiBrandSupplierIndex()
@@ -114,6 +148,17 @@ export default function App({ user, onLogout }: AppProps) {
       .catch(() => undefined);
   }
   useEffect(loadBrandSupplierIndex, []);
+
+  // Load reference exchange rates once (live ECB, static fallback handled server-side).
+  useEffect(() => {
+    apiRates()
+      .then((r) => {
+        setLiveRates(r.rates);
+        setRateDate(r.date);
+        setRateLive(r.live);
+      })
+      .catch(() => setRateLive(false));
+  }, []);
 
   // Close the user menu on outside click or Escape.
   useEffect(() => {
@@ -147,6 +192,47 @@ export default function App({ user, onLogout }: AppProps) {
         );
       })
     : products;
+
+  // Distinct source currencies in the offer that differ from the target currency.
+  // A blank row currency is treated as CHF (matches the backend pricing default).
+  const targetUpper = targetCurrency.toUpperCase();
+  const foreignCurrencies = Array.from(
+    new Set(products.map((p) => (p.currency || "CHF").toUpperCase()))
+  ).filter((c) => c !== targetUpper);
+
+  // Live "1 <cur> = X <target>" reference, derived from the CHF-based ECB table.
+  function liveMultiplier(cur: string): number | null {
+    const s = liveRates[cur.toUpperCase()];
+    const t = liveRates[targetUpper];
+    if (!s || !t) return null;
+    return t / s;
+  }
+
+  // Rows for the settings UI: each foreign currency with its live + effective value.
+  const rateRows = foreignCurrencies.map((cur) => {
+    const live = liveMultiplier(cur);
+    const override = rateOverrides[cur];
+    return { currency: cur, live, value: override ?? live };
+  });
+
+  // Build the CHF-based rates dict for export. Start from the live table, then
+  // translate each manual "1 cur = v target" override into the CHF-based slot:
+  //   convert(cur→target) = rates[target]/rates[cur]  ⇒  rates[cur] = rates[target]/v
+  function buildExportRates(): Record<string, number> {
+    const out: Record<string, number> = { ...liveRates };
+    const tgtRate = liveRates[targetUpper] ?? 1.0;
+    for (const [cur, v] of Object.entries(rateOverrides)) {
+      const key = cur.toUpperCase();
+      // Never override the target currency's own slot (it must stay self-consistent).
+      if (key === targetUpper || !v || v <= 0) continue;
+      out[key] = tgtRate / v;
+    }
+    return out;
+  }
+
+  function handleRateChange(currency: string, value: number) {
+    setRateOverrides((prev) => ({ ...prev, [currency.toUpperCase()]: value }));
+  }
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -241,6 +327,7 @@ export default function App({ user, onLogout }: AppProps) {
     setParseResult(null);
     setProducts([]);
     setEdits({});
+    setRateOverrides({});
 
     try {
       const result = await apiParse(file);
@@ -253,6 +340,22 @@ export default function App({ user, onLogout }: AppProps) {
       }
       if (!supplierName.trim()) setSupplierName(inferSupplierName(file.name));
       if (result.detected_currency) setTargetCurrency(result.detected_currency);
+
+      // When local extraction found nothing, immediately offer manual column mapping.
+      if (result.extraction_mode === "none" && result.products.length === 0) {
+        setShowMapping(true);
+        setMappingOptions(null);
+        setMappingError("");
+        setMappingOptionsLoading(true);
+        try {
+          const options = await apiColumnOptions(result.file_id, {});
+          setMappingOptions(options);
+        } catch (e) {
+          setMappingError(e instanceof Error ? e.message : "Spalten konnten nicht geladen werden");
+        } finally {
+          setMappingOptionsLoading(false);
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unbekannter Fehler");
       setStage("empty");
@@ -302,6 +405,47 @@ export default function App({ user, onLogout }: AppProps) {
     }
   }
 
+  async function handleOpenManualMapping() {
+    if (!parseResult) return;
+    setShowMapping(true);
+    setMappingOptions(null);
+    setMappingError("");
+    setMappingOptionsLoading(true);
+    try {
+      const options = await apiColumnOptions(
+        parseResult.file_id,
+        columnMappingResult?.mapped_fields ?? {},
+      );
+      setMappingOptions(options);
+    } catch (e) {
+      setMappingError(e instanceof Error ? e.message : "Spalten konnten nicht geladen werden");
+    } finally {
+      setMappingOptionsLoading(false);
+    }
+  }
+
+  async function handleApplyManualMapping(mapping: Record<string, string>) {
+    if (!parseResult) return;
+    setIsRemapping(true);
+    setMappingError("");
+    try {
+      const result = await apiRemapColumns(
+        parseResult.file_id,
+        mapping,
+        columnMappingResult?.mapped_fields ?? {},
+      );
+      setColumnMappingResult(result);
+      setEdits({});
+      setProducts(result.products);
+      setStage(result.products.length > 0 ? "ready" : "parsed");
+      setShowMapping(false);
+    } catch (e) {
+      setMappingError(e instanceof Error ? e.message : "Zuordnung fehlgeschlagen");
+    } finally {
+      setIsRemapping(false);
+    }
+  }
+
   async function handleExtract() {
     if (!parseResult) return;
     setError("");
@@ -348,7 +492,8 @@ export default function App({ user, onLogout }: AppProps) {
         effectiveEdits,
         marketPrices,
         user.name,
-        marke.trim()
+        marke.trim(),
+        buildExportRates()
       );
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const filename = `Offerte_${supplierName.trim().replace(/\s+/g, "_")}_${today}.xlsx`;
@@ -581,6 +726,16 @@ export default function App({ user, onLogout }: AppProps) {
         />
       )}
 
+      <ColumnMappingModal
+        error={mappingError}
+        isApplying={isRemapping}
+        isLoading={mappingOptionsLoading}
+        onApply={(m) => void handleApplyManualMapping(m)}
+        onClose={() => setShowMapping(false)}
+        open={showMapping}
+        options={mappingOptions}
+      />
+
       {view === "archive" ? (
         <ArchiveView />
       ) : stage === "exported" && exportSummary ? (
@@ -622,6 +777,7 @@ export default function App({ user, onLogout }: AppProps) {
                 isLoading={isLoading}
                 isMappingColumns={isMappingColumns}
                 mappingError={mappingError}
+                onManualMap={() => void handleOpenManualMapping()}
                 onMapColumns={() => void handleMapColumns()}
                 parseResult={parseResult}
               />
@@ -646,14 +802,18 @@ export default function App({ user, onLogout }: AppProps) {
                 marke={marke}
                 marketDiscount={marketDiscount}
                 onCurrencyChange={setTargetCurrency}
-                onMarginChange={setMargin}
+                onMarginChange={handleMarginChange}
                 onMarketDiscountChange={setMarketDiscount}
                 onMarkeChange={setMarke}
                 onMarkeStatusChange={setMarkeStatus}
                 onPricingModeChange={setPricingMode}
+                onRateChange={handleRateChange}
                 onSupplierNameChange={setSupplierName}
                 onSupplierStatusChange={setSupplierStatus}
                 pricingMode={pricingMode}
+                rateDate={rateDate}
+                rateLive={rateLive}
+                rateRows={rateRows}
                 suppliersByBrand={suppliersByBrand}
                 supplierName={supplierName}
                 targetCurrency={targetCurrency}

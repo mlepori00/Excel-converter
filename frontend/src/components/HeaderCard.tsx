@@ -7,6 +7,7 @@ type Props = {
   mappingError: string;
   columnMappingResult: MapColumnsResult | null;
   onMapColumns: () => void;
+  onManualMap: () => void;
 };
 
 function fmtChf(v: number): string {
@@ -21,6 +22,7 @@ export function HeaderCard({
   mappingError,
   columnMappingResult,
   onMapColumns,
+  onManualMap,
 }: Props) {
   const isBusy = isLoading || isMappingColumns;
   const r = columnMappingResult;
@@ -58,21 +60,31 @@ export function HeaderCard({
       {mappingError && <p className="parse-error">{mappingError}</p>}
 
       {parseResult && (
-        <div className="action-row">
+        <>
+          <div className="action-row">
+            <button
+              className="action-btn"
+              disabled={isBusy}
+              onClick={onMapColumns}
+              type="button"
+            >
+              {isMappingColumns ? "Analysiert …" : r ? "Erneut analysieren" : "Header analysieren"}
+            </button>
+            {parseResult.map_columns_cost_estimate_chf != null && (
+              <span className="action-cost">
+                ~ CHF {fmtChf(parseResult.map_columns_cost_estimate_chf)}
+              </span>
+            )}
+          </div>
           <button
-            className="action-btn"
+            className="reparse-button"
             disabled={isBusy}
-            onClick={onMapColumns}
+            onClick={onManualMap}
             type="button"
           >
-            {isMappingColumns ? "Analysiert …" : r ? "Erneut analysieren" : "Header analysieren"}
+            Spalten manuell zuordnen
           </button>
-          {parseResult.map_columns_cost_estimate_chf != null && (
-            <span className="action-cost">
-              ~ CHF {fmtChf(parseResult.map_columns_cost_estimate_chf)}
-            </span>
-          )}
-        </div>
+        </>
       )}
     </div>
   );

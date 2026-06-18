@@ -7,6 +7,7 @@ Start with:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,10 +32,27 @@ from offerten_converter.api.routes import router  # noqa: E402
 from offerten_converter.infrastructure.db.engine import init_db  # noqa: E402
 
 
+_logger = logging.getLogger(__name__)
+
+
+def _startup_checks() -> None:
+    if not os.getenv("SECRET_KEY"):
+        _logger.warning(
+            "SECRET_KEY not set — JWT tokens are signed with an insecure dev key. "
+            "Set SECRET_KEY before exposing this server to the internet."
+        )
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        _logger.warning(
+            "ANTHROPIC_API_KEY not set — AI extraction will return HTTP 500. "
+            "Set ANTHROPIC_API_KEY to enable Claude-based extraction."
+        )
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """Initialise the database (create tables) on startup."""
     init_db()
+    _startup_checks()
     yield
 
 
@@ -45,9 +63,19 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# ALLOWED_ORIGINS: comma-separated list of allowed origins (e.g. "https://amp.example.com").
+# Defaults to "*" for local dev; always set this in production.
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
+if _allowed_origins == ["*"]:
+    _logger.warning(
+        "ALLOWED_ORIGINS not set — CORS is open to all origins. "
+        "Set ALLOWED_ORIGINS in production."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

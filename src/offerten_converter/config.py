@@ -40,7 +40,15 @@ _DEV_SECRET = "dev-insecure-secret-change-me-in-production-please"
 
 def secret_key() -> str:
     """Signing key for JWT access tokens. Set SECRET_KEY in production."""
-    return os.getenv("SECRET_KEY") or _DEV_SECRET
+    import logging
+    key = os.getenv("SECRET_KEY")
+    if not key:
+        logging.getLogger(__name__).warning(
+            "SECRET_KEY not set — using insecure dev default. "
+            "Set SECRET_KEY in production."
+        )
+        return _DEV_SECRET
+    return key
 
 
 def access_token_ttl_minutes() -> int:
