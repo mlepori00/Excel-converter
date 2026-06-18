@@ -79,6 +79,7 @@ class ReadResult:
     metadata_hints: dict[str, Any] = field(default_factory=dict)
     was_unpivoted: bool = False
     unpivot_info: str = ""
+    was_raw_fallback: bool = False
 
 
 def _detect_header_row(df_raw: pd.DataFrame, max_scan: int = 50) -> int:
@@ -211,9 +212,6 @@ def read_offer_file(
             if not (str(c).startswith("Unnamed:") and df[c].isna().all())
         ]]
 
-        # Snapshot before any transformation. Used by the safety net below.
-        df_initial = df.copy()
-
         size_cols, other_cols = _detect_size_columns(df)
         was_unpivoted = False
         unpivot_info = ""
@@ -246,21 +244,26 @@ def read_offer_file(
         df = _drop_non_product_rows(df)
 
         # Safety net: if all heuristics produced 0 rows but the sheet had data,
-        # return the minimally-processed snapshot so downstream paths (especially
-        # AI extraction) still have something to work with.
-        if df.empty and not df_initial.empty:
+        # return the truly raw sheet so downstream paths (especially AI extraction)
+        # still see the original content. df_raw has integer column names and includes
+        # the header row as a data row — ideal for the AI, which can reconstruct the
+        # layout. Local (heuristic) extraction will return mode=none, surfacing the
+        # AI button to the user.
+        if df.empty and not df_raw.empty:
+            df_raw_clean = df_raw.dropna(how="all").reset_index(drop=True)
             metadata_hints["layout_type"] = "raw_fallback"
             metadata_hints["was_raw_fallback"] = True
             logger.warning(
                 "All heuristics produced 0 rows (sheet had %d rows); "
-                "returning raw fallback.",
-                len(df_initial),
+                "returning raw sheet as fallback.",
+                len(df_raw_clean),
             )
             return ReadResult(
-                df=df_initial,
+                df=df_raw_clean,
                 metadata_hints=metadata_hints,
                 was_unpivoted=False,
                 unpivot_info="",
+                was_raw_fallback=True,
             )
 
         if mapping:

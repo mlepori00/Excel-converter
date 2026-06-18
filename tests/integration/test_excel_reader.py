@@ -114,11 +114,12 @@ def test_empty_size_grid_keeps_flat_rows_instead_of_deleting_them():
 
 
 def test_raw_fallback_when_all_rows_removed_as_footer():
-    """Safety net: if all heuristics empty the frame, return the raw snapshot.
+    """Safety net: if all heuristics empty the frame, return the truly raw sheet.
 
     _drop_non_product_rows filters rows whose identity columns contain footer
     terms like "www.". When that removes every row, read_offer_file must not
-    return an empty DataFrame — it falls back to the minimally-processed sheet.
+    return an empty DataFrame — it falls back to the raw sheet (header=None),
+    which includes the original header row as a data row so the AI sees everything.
     """
     buf = io.BytesIO()
     pd.DataFrame({
@@ -130,10 +131,52 @@ def test_raw_fallback_when_all_rows_removed_as_footer():
     result = read_offer_file(buf.getvalue(), "offer.xlsx")
 
     assert not result.df.empty
+    assert result.was_raw_fallback is True
     assert result.metadata_hints.get("layout_type") == "raw_fallback"
     assert result.metadata_hints.get("was_raw_fallback") is True
-    assert len(result.df) == 2
+    # df_raw (header=None) includes the header row as a data row → 3 total rows
+    assert len(result.df) == 3
     assert result.was_unpivoted is False
+
+
+def test_raw_fallback_when_all_identity_cells_are_blank():
+    """Safety net: mapped identity column with all-blank values removes every row.
+
+    When 'Description' maps to product_name but holds only None values,
+    _drop_non_product_rows filters every row via the blank-identity check.
+    The safety net must return the raw sheet rather than an empty DataFrame.
+    """
+    buf = io.BytesIO()
+    pd.DataFrame({
+        "Description": [None, None, None],   # alias → product_name, but all blank
+        "WHS": ["65.00", "89.90", "129.99"], # trade price alias
+        "Available": ["10", "5", "3"],
+    }).to_excel(buf, index=False)
+
+    result = read_offer_file(buf.getvalue(), "mystery_supplier.xlsx")
+
+    assert not result.df.empty
+    assert result.was_raw_fallback is True
+    assert result.metadata_hints.get("layout_type") == "raw_fallback"
+    # Raw fallback: 4 rows (header row + 3 data rows in df_raw)
+    assert len(result.df) == 4
+
+
+def test_normal_read_has_was_raw_fallback_false():
+    """A file that parses cleanly must NOT set was_raw_fallback."""
+    buf = io.BytesIO()
+    pd.DataFrame({
+        "REF": ["A-1", "A-2"],
+        "Description": ["Shoe One", "Shoe Two"],
+        "WHS": ["65.00", "89.90"],
+        "Available": ["10", "5"],
+    }).to_excel(buf, index=False)
+
+    result = read_offer_file(buf.getvalue(), "normal.xlsx")
+
+    assert not result.df.empty
+    assert result.was_raw_fallback is False
+    assert result.metadata_hints.get("layout_type") != "raw_fallback"
 
 
 def test_filled_size_grid_still_unpivots():

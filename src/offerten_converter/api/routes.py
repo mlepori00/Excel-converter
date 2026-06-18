@@ -381,6 +381,8 @@ def _read_for_mapping(
 
 def _map_columns_cost(result: Any) -> float:
     """Estimate CHF cost of the Haiku column-mapper for this file's original columns."""
+    if result.was_raw_fallback:
+        return 0.0
     heuristic_mapping = result.metadata_hints.get("column_mapping", {})
     heuristic_added = {c for c, orig in heuristic_mapping.items() if c != orig}
     original_cols = [
