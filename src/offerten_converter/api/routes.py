@@ -55,6 +55,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 _repo = FileProfileRepository()
 
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB hard cap per upload
+
 
 def _row_to_dict(row: Any) -> dict:
     """Serialize a ProductRow dataclass to a plain dict."""
@@ -429,11 +431,23 @@ async def parse_offer(
     Returns file metadata, auto-extracted products (local or cache), and a file_id
     to reference this file in subsequent /extract and /export calls.
     """
-    file_bytes = await file.read()
+    chunks: list[bytes] = []
+    received = 0
+    while chunk := await file.read(1024 * 1024):
+        received += len(chunk)
+        if received > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Datei zu groß. Maximal 25 MB erlaubt.",
+            )
+        chunks.append(chunk)
+    file_bytes = b"".join(chunks)
     filename = file.filename or "upload.xlsx"
 
     try:
-        result, sheets, chosen = _parse_file(file_bytes, filename, sheet_name)
+        result, sheets, chosen = await run_in_threadpool(
+            _parse_file, file_bytes, filename, sheet_name
+        )
     except (ValueError, HTTPException) as exc:
         status = exc.status_code if isinstance(exc, HTTPException) else 400
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)

@@ -498,3 +498,39 @@ def test_list_profiles_returns_list():
     resp = client.get("/api/profiles")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+# ---------------------------------------------------------------------------
+# P2-2: upload size limit
+# ---------------------------------------------------------------------------
+
+def test_upload_too_large_returns_413(monkeypatch):
+    """P2-2: oversized upload must be rejected at the API boundary (HTTP 413)
+    before any parsing occurs. We lower the cap to 100 bytes so the test
+    does not need a real 25 MB file."""
+    monkeypatch.setattr("offerten_converter.api.routes._MAX_UPLOAD_BYTES", 100)
+    resp = client.post(
+        "/api/offer/parse",
+        files={"file": ("big.xlsx", BytesIO(b"x" * 200), _XLSX_MIME)},
+    )
+    assert resp.status_code == 413
+    assert "25 MB" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# P2-3: xlsx cell/row cap
+# ---------------------------------------------------------------------------
+
+def test_parse_rejects_oversized_xlsx(monkeypatch):
+    """P2-3: an xlsx that exceeds the row cap must be rejected with HTTP 400
+    before the expensive unmerge/parse step runs. We lower the cap to 3 rows
+    and upload a file with 5 data rows."""
+    monkeypatch.setattr("offerten_converter.infrastructure.excel_reader._MAX_ROWS", 3)
+    buf = BytesIO()
+    pd.DataFrame({"SKU": range(5), "Preis": [1.0] * 5}).to_excel(buf, index=False)
+    resp = client.post(
+        "/api/offer/parse",
+        files={"file": ("huge.xlsx", BytesIO(buf.getvalue()), _XLSX_MIME)},
+    )
+    assert resp.status_code == 400
+    assert "Zeilen" in resp.json()["detail"]

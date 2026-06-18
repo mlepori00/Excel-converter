@@ -70,6 +70,9 @@ _PRICE_FALLBACK_ALIASES = (
     "srp", "msrp", "list price",
 )
 
+_MAX_ROWS = 50_000
+_MAX_COLS = 500
+
 
 @dataclass
 class ReadResult:
@@ -163,6 +166,35 @@ def get_recommended_sheet_name(file_bytes: bytes, filename: str) -> str | None:
         return names[0] if names else None
 
 
+def _assert_xlsx_size_limit(file_bytes: bytes, sheet_name: str | None) -> None:
+    """Gate before the expensive unmerge/parse step.
+
+    Opens the workbook read-only (no cell data loaded) so it is fast even for
+    multi-megabyte files, then rejects sheets that exceed _MAX_ROWS / _MAX_COLS.
+    A crafted xlsx with 1 M rows would otherwise stall the event loop for seconds
+    and consume gigabytes of memory during xl.parse().
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
+    try:
+        ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+        rows = ws.max_row or 0
+        cols = ws.max_column or 0
+    finally:
+        wb.close()
+    if rows > _MAX_ROWS:
+        raise ValueError(
+            f"Sheet hat {rows:,} Zeilen — Maximum ist {_MAX_ROWS:,}. "
+            "Bitte die Datei aufteilen oder bereinigen."
+        )
+    if cols > _MAX_COLS:
+        raise ValueError(
+            f"Sheet hat {cols} Spalten — Maximum ist {_MAX_COLS}. "
+            "Bitte die Datei bereinigen."
+        )
+
+
 def read_offer_file(
     file_bytes: bytes,
     filename: str,
@@ -174,6 +206,8 @@ def read_offer_file(
         return ReadResult(df=_read_csv(file_bytes))
 
     try:
+        if lower.endswith(".xlsx"):
+            _assert_xlsx_size_limit(file_bytes, sheet_name)
         processed_bytes = (
             _unmerge_cells(file_bytes, sheet_name)
             if lower.endswith(".xlsx")
@@ -181,7 +215,7 @@ def read_offer_file(
         )
         xl = pd.ExcelFile(io.BytesIO(processed_bytes))
         chosen = sheet_name or get_recommended_sheet_name(file_bytes, filename) or xl.sheet_names[0]
-        df_raw = xl.parse(chosen, header=None)
+        df_raw = xl.parse(chosen, header=None, nrows=_MAX_ROWS)
 
         block_df = _read_repeated_header_blocks(df_raw)
         if block_df is not None:
@@ -205,7 +239,7 @@ def read_offer_file(
         metadata_hints = _extract_metadata_hints(df_raw, header_row)
         metadata_hints["source_sheet"] = chosen
 
-        df = xl.parse(chosen, header=header_row, dtype=str)
+        df = xl.parse(chosen, header=header_row, dtype=str, nrows=_MAX_ROWS)
         df = df.dropna(how="all").reset_index(drop=True)
         df = df[[
             c for c in df.columns
