@@ -18,6 +18,12 @@ services:
       # Persist the SQLite database (and future blobs) across redeploys.
       - offerten-data:/app/data
     restart: unless-stopped
+    # Resource caps (host has 2 vCPU / 4 GB). Defense-in-depth on top of the
+    # in-app upload/cell limits: a runaway parse or the Camoufox browser can't
+    # OOM the whole host. Leaves ~1 GB for the OS. Tune if the host is resized.
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 512
 
 volumes:
   offerten-data:

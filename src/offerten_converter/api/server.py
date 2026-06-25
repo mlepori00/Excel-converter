@@ -80,6 +80,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Generic security headers on every response. Cheap hardening against MIME
+# sniffing and clickjacking. HSTS is only emitted in production (it is
+# meaningless/undesirable over plain-HTTP local dev) and assumes TLS is
+# terminated by the reverse proxy in front of the app.
+_IS_PROD = os.getenv("APP_ENV", "dev").lower() not in ("dev", "local", "test")
+
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if _IS_PROD:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 # Auth router is public (no guard) so /api/auth/login is reachable.
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 

@@ -48,4 +48,11 @@ USER appuser
 RUN python -m camoufox fetch || echo "Camoufox fetch skipped – market price scraper will be disabled"
 
 EXPOSE 8000
+
+# Liveness probe against the app's /health route. Uses stdlib urllib (no curl in
+# the slim image). A hung-but-alive uvicorn turns unhealthy and is restarted by
+# the orchestrator (compose: restart: unless-stopped).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
+
 CMD ["uvicorn", "offerten_converter.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
